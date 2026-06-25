@@ -1,0 +1,145 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <div class="split-title">
+    <div>
+      <h1>{{ sample.sample_id }}</h1>
+      <p class="muted">QR: {{ sample.qr_code_value }}</p>
+    </div>
+    <a class="button" href="{{ url_for('scan', mode='lookup') }}">Scan Another</a>
+  </div>
+
+  <div class="details">
+    <div><strong>Project</strong><span>{{ sample.project }}</span></div>
+    <div><strong>Task</strong><span>{{ sample.task }}</span></div>
+    <div><strong>Type</strong><span>{{ sample.sample_type }}</span></div>
+    <div><strong>Batch / Lot</strong><span>{{ sample.batch_lot }}</span></div>
+    <div><strong>Status</strong><span>{{ sample.status }}</span></div>
+    <div><strong>Owner</strong><span>{{ sample.current_owner }}</span></div>
+    <div><strong>Location</strong><span>{{ sample.current_location }}</span></div>
+    <div><strong>Created</strong><span>{{ sample.created_at }} by {{ sample.created_by }}</span></div>
+  </div>
+
+  {% if sample.notes %}
+    <h2>Notes</h2>
+    <p>{{ sample.notes }}</p>
+  {% endif %}
+</section>
+
+<section class="card">
+  <div class="split-title">
+    <div>
+      <h2>Characterization Checklist</h2>
+      <p class="muted">Add required characterization work and mark items complete when results are done.</p>
+    </div>
+  </div>
+
+  <form method="post" action="{{ url_for('add_characterization', qr_code_value=sample.qr_code_value) }}" class="inline-form">
+    <input name="characterization_type" placeholder="Add characterization type, e.g. SEM, XRD, FTIR" autocomplete="off">
+    <input name="notes" placeholder="Optional notes" autocomplete="off">
+    <button class="button" type="submit">Add</button>
+  </form>
+
+  {% if characterizations %}
+    <div class="checklist">
+      {% for c in characterizations %}
+        <div class="check-item {{ 'done' if c.completed_at else 'pending' }}">
+          <span class="check-mark">✓</span>
+          <div class="check-main">
+            <strong>{{ c.characterization_type }}</strong>
+            {% if c.completed_at %}
+              <span class="muted">Completed {{ c.completed_at }} by {{ c.completed_by }}</span>
+              {% if c.data_location %}<span><strong>Data location:</strong> {{ c.data_location }}</span>{% endif %}
+            {% else %}
+              <span class="muted">Needed. Added {{ c.created_at }}</span>
+            {% endif %}
+            {% if c.notes %}<span>{{ c.notes }}</span>{% endif %}
+          </div>
+          {% if not c.completed_at %}
+            <form method="post" action="{{ url_for('complete_characterization', qr_code_value=sample.qr_code_value, char_id=c.id) }}" class="complete-form">
+              <input name="completed_by" placeholder="Completed by" required autocomplete="off">
+              <input name="data_location" placeholder="Data location / folder / link" autocomplete="off">
+              <input name="completion_notes" placeholder="Optional result/notes" autocomplete="off">
+              <button class="button primary" type="submit">Mark Complete</button>
+            </form>
+          {% endif %}
+        </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <p>No characterization requirements recorded yet.</p>
+  {% endif %}
+</section>
+
+<section class="card narrow">
+  <h2>Record Handoff</h2>
+  <form method="post" action="{{ url_for('create_handoff', qr_code_value=sample.qr_code_value) }}" class="form">
+    <label>
+      From
+      <input value="{{ sample.current_owner }}" readonly>
+    </label>
+    <label>
+      Hand Off To <span class="required">required</span>
+      <input name="to_person" required autocomplete="off">
+    </label>
+    <label>
+      New Location
+      <input name="to_location" autocomplete="off">
+    </label>
+    <label>
+      New Status
+      <input name="status" value="Transferred" autocomplete="off">
+    </label>
+    <label>
+      Notes
+      <textarea name="notes" rows="3"></textarea>
+    </label>
+    <button class="button primary" type="submit">Confirm Handoff</button>
+  </form>
+</section>
+
+<section class="grid two">
+  <div class="card">
+    <h2>Handoff History</h2>
+    {% if handoffs %}
+      <table>
+        <thead><tr><th>Time</th><th>From</th><th>To</th><th>Location</th><th>Notes</th></tr></thead>
+        <tbody>
+          {% for h in handoffs %}
+          <tr>
+            <td>{{ h.timestamp }}</td>
+            <td>{{ h.from_person }}</td>
+            <td>{{ h.to_person }}</td>
+            <td>{{ h.to_location }}</td>
+            <td>{{ h.notes }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p>No handoffs recorded.</p>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <h2>Recent Scan Events</h2>
+    {% if scans %}
+      <table>
+        <thead><tr><th>Time</th><th>Type</th><th>Result</th><th>By</th></tr></thead>
+        <tbody>
+          {% for s in scans %}
+          <tr>
+            <td>{{ s.timestamp }}</td>
+            <td>{{ s.scan_type }}</td>
+            <td>{{ s.result }}</td>
+            <td>{{ s.scanned_by }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p>No scan events recorded.</p>
+    {% endif %}
+  </div>
+</section>
+{% endblock %}

@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <h1>Search Samples</h1>
+  <form method="get" action="{{ url_for('search') }}" class="search-row">
+    <input name="q" value="{{ term }}" placeholder="Search QR, sample ID, project, task, characterization, owner, location, status" autofocus>
+    <button class="button primary" type="submit">Search</button>
+  </form>
+</section>
+
+{% if term %}
+<section class="card">
+  <h2>Results for “{{ term }}”</h2>
+  {% if rows %}
+    <table>
+      <thead><tr><th>Sample</th><th>QR</th><th>Project</th><th>Task</th><th>Type</th><th>Owner</th><th>Status</th></tr></thead>
+      <tbody>
+        {% for sample in rows %}
+        <tr>
+          <td><a href="{{ url_for('sample_detail', qr_code_value=sample.qr_code_value) }}">{{ sample.sample_id }}</a></td>
+          <td>{{ sample.qr_code_value }}</td>
+          <td>{{ sample.project }}</td>
+          <td>{{ sample.task }}</td>
+          <td>{{ sample.sample_type }}</td>
+          <td>{{ sample.current_owner }}</td>
+          <td>{{ sample.status }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p>No matching samples.</p>
+  {% endif %}
+</section>
+{% endif %}
+{% endblock %}

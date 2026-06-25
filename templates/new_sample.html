@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card narrow">
+  <h1>Create Sample Record</h1>
+  <p>This QR code is not assigned yet. Fill out the sample fields to claim it.</p>
+
+  <form method="post" action="{{ url_for('create_sample') }}" class="form" id="sample-form">
+    <label>
+      QR Code Value
+      <input name="qr_code_value" value="{{ qr_code_value }}" readonly>
+    </label>
+    <label>
+      Sample ID <span class="required">required</span>
+      <input name="sample_id" required autocomplete="off">
+    </label>
+    <label>
+      Project
+      <input name="project" autocomplete="off" placeholder="Project name or number">
+    </label>
+    <label>
+      Task
+      <input name="task" autocomplete="off" placeholder="Task, work package, or activity">
+    </label>
+    <label>
+      Sample Type
+      <input name="sample_type" autocomplete="off">
+    </label>
+    <label>
+      Batch / Lot
+      <input name="batch_lot" autocomplete="off">
+    </label>
+    <label>
+      Created By
+      <input name="created_by" autocomplete="off">
+    </label>
+    <label>
+      Current Owner
+      <input name="current_owner" autocomplete="off">
+    </label>
+    <label>
+      Current Location
+      <input name="current_location" autocomplete="off">
+    </label>
+    <label>
+      Status
+      <input name="status" value="Produced" autocomplete="off">
+    </label>
+
+    <div class="checklist-builder">
+      <label>
+        Characterization Needed
+        <span class="hint">Enter one characterization type at a time, then click Add.</span>
+        <div class="inline-row">
+          <input id="char-input" autocomplete="off" placeholder="Example: SEM, XRD, FTIR, mass, microscopy">
+          <button class="button" type="button" id="add-char-button">Add</button>
+        </div>
+      </label>
+      <div id="char-list" class="checklist empty">No characterization requirements added yet.</div>
+    </div>
+
+    <label>
+      Notes
+      <textarea name="notes" rows="4"></textarea>
+    </label>
+    <button class="button primary" type="submit">Assign QR Code to Sample</button>
+  </form>
+</section>
+
+<script>
+(function () {
+  const input = document.getElementById("char-input");
+  const button = document.getElementById("add-char-button");
+  const list = document.getElementById("char-list");
+  const form = document.getElementById("sample-form");
+
+  function refreshEmptyState() {
+    if (list.querySelector(".check-item")) {
+      list.classList.remove("empty");
+    } else {
+      list.classList.add("empty");
+      list.textContent = "No characterization requirements added yet.";
+    }
+  }
+
+  function addCharacterization() {
+    const value = input.value.trim();
+    if (!value) return;
+    if (list.classList.contains("empty")) {
+      list.textContent = "";
+      list.classList.remove("empty");
+    }
+
+    const item = document.createElement("div");
+    item.className = "check-item pending";
+
+    const mark = document.createElement("span");
+    mark.className = "check-mark";
+    mark.textContent = "✓";
+
+    const text = document.createElement("span");
+    text.textContent = value;
+
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "link-button";
+    remove.textContent = "Remove";
+    remove.addEventListener("click", function () {
+      item.remove();
+      refreshEmptyState();
+    });
+
+    const hidden = document.createElement("input");
+    hidden.type = "hidden";
+    hidden.name = "characterization_type";
+    hidden.value = value;
+
+    item.appendChild(mark);
+    item.appendChild(text);
+    item.appendChild(remove);
+    item.appendChild(hidden);
+    list.appendChild(item);
+    input.value = "";
+    input.focus();
+  }
+
+  button.addEventListener("click", addCharacterization);
+  input.addEventListener("keydown", function (event) {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      addCharacterization();
+    }
+  });
+})();
+</script>
+{% endblock %}

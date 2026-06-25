@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card narrow">
+  <h1>{% if mode == 'assign' %}Assign a QR Code{% else %}Scan / Lookup Sample{% endif %}</h1>
+  <p>
+    {% if mode == 'assign' %}
+      Scan an unused pre-printed QR label. If it is new, you will create a sample record.
+    {% else %}
+      Scan an assigned QR label to open the sample record and record handoffs.
+    {% endif %}
+  </p>
+
+  <div id="reader" class="scanner"></div>
+  <div class="actions compact">
+    <button id="startCamera" class="button" type="button">Start Camera Scanner</button>
+    <button id="stopCamera" class="button" type="button" disabled>Stop Camera</button>
+  </div>
+  <p class="hint">Camera scanning uses your browser. On phones, camera access usually requires HTTPS unless you are on localhost.</p>
+
+  <form method="post" action="{{ url_for('submit_scan') }}" class="form" id="scanForm">
+    <input type="hidden" name="mode" value="{{ mode }}">
+    <label>
+      QR Code Value
+      <input id="qrInput" name="qr_code_value" autofocus autocomplete="off" placeholder="Scan with camera, handheld scanner, or type here">
+    </label>
+    <label>
+      Scanned By <span class="optional">optional</span>
+      <input name="scanned_by" autocomplete="off">
+    </label>
+    <button class="button primary" type="submit">Continue</button>
+  </form>
+</section>
+
+<script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+<script>
+const qrInput = document.getElementById("qrInput");
+const form = document.getElementById("scanForm");
+const startButton = document.getElementById("startCamera");
+const stopButton = document.getElementById("stopCamera");
+let scanner = null;
+let alreadySubmitted = false;
+
+function submitCode(decodedText) {
+  if (alreadySubmitted) return;
+  alreadySubmitted = true;
+  qrInput.value = decodedText;
+  if (scanner) {
+    scanner.stop().finally(() => form.submit());
+  } else {
+    form.submit();
+  }
+}
+
+startButton.addEventListener("click", async () => {
+  alreadySubmitted = false;
+  scanner = new Html5Qrcode("reader");
+  startButton.disabled = true;
+  stopButton.disabled = false;
+  try {
+    await scanner.start(
+      { facingMode: "environment" },
+      { fps: 10, qrbox: { width: 250, height: 250 } },
+      submitCode,
+      () => {}
+    );
+  } catch (err) {
+    alert("Could not start camera: " + err);
+    startButton.disabled = false;
+    stopButton.disabled = true;
+  }
+});
+
+stopButton.addEventListener("click", async () => {
+  if (scanner) {
+    await scanner.stop();
+  }
+  startButton.disabled = false;
+  stopButton.disabled = true;
+});
+
+qrInput.addEventListener("keydown", (event) => {
+  if (event.key === "Enter" && qrInput.value.trim()) {
+    event.preventDefault();
+    form.submit();
+  }
+});
+</script>
+{% endblock %}
