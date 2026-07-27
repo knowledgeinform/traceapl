@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-title">
+  <h1>TraceAPL Admin Dashboard</h1>
+  <p>Admin-only tools for database backups and protected maintenance actions.</p>
+</section>
+
+<section class="grid two">
+  <div class="card backup-card">
+    <h2>Database Backup</h2>
+    <p class="muted">TraceAPL creates one automatic SQLite backup per day while the app is running. Backups are stored in the local <code>backups</code> folder.</p>
+    <div class="details compact-details">
+      <div><strong>Latest backup</strong><span>{{ backup_info.latest_name }}</span></div>
+      <div><strong>Latest backup time</strong><span>{{ backup_info.latest_time }}</span></div>
+      <div><strong>Backup count</strong><span>{{ backup_info.count }}</span></div>
+      <div><strong>Retention</strong><span>{{ backup_info.retention_days }} days</span></div>
+    </div>
+    <div class="actions compact">
+      <form method="post" action="{{ url_for('create_backup_now') }}">
+        <button class="button" type="submit">Create Backup Now</button>
+      </form>
+      <a class="button" href="{{ url_for('download_latest_backup') }}">Download Latest Backup</a>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Admin access</h2>
+    <p class="muted">You are currently logged in as a TraceAPL admin in this browser session.</p>
+    <div class="actions compact">
+      <a class="button" href="{{ url_for('admin_deleted_samples') }}">Archived Samples</a>
+      <a class="button" href="{{ url_for('admin_audit') }}">Audit Trail</a>
+      <form method="post" action="{{ url_for('run_reminders_now') }}">
+        <button class="button" type="submit">Run Reminder Check</button>
+      </form>
+      <form method="post" action="{{ url_for('admin_logout') }}">
+        <button class="button" type="submit">Log Out</button>
+      </form>
+    </div>
+  </div>
+</section>
+{% endblock %}

@@ -1,25 +1,31 @@
 {% extends "base.html" %}
 {% block content %}
 <section class="card narrow">
-  <h1>Create Sample Record</h1>
-  <p>This QR code is not assigned yet. Fill out the sample fields to claim it.</p>
+  {% if manual_entry %}
+    <h1>Manually Enter Sample</h1>
+    <p>Create a sample record without scanning or assigning a physical code. TraceAPL will use the Sample ID as the manual tracking key.</p>
+  {% else %}
+    <h1>Create Sample Record</h1>
+    <p>This scanned code is not assigned yet. Fill out the sample fields to claim it.</p>
+  {% endif %}
 
   <form method="post" action="{{ url_for('create_sample') }}" class="form" id="sample-form">
-    <label>
-      QR Code Value
-      <input name="qr_code_value" value="{{ qr_code_value }}" readonly>
-    </label>
+    <input type="hidden" name="entry_mode" value="{{ 'manual' if manual_entry else 'qr' }}">
+    {% if manual_entry %}
+      <div class="notice soft">Manual entries can still be searched, handed off, and assigned characterization tasks. They just will not have a physical QR/barcode label unless one is added later.</div>
+    {% else %}
+      <label>
+        Scanned Code Value
+        <input name="qr_code_value" value="{{ qr_code_value }}" readonly>
+      </label>
+    {% endif %}
     <label>
       Sample ID <span class="required">required</span>
       <input name="sample_id" required autocomplete="off">
     </label>
     <label>
-      Project
-      <input name="project" autocomplete="off" placeholder="Project name or number">
-    </label>
-    <label>
-      Task
-      <input name="task" autocomplete="off" placeholder="Task, work package, or activity">
+      Work Program
+      <input name="work_program" data-denodo-autocomplete="work-program" autocomplete="off" placeholder="Start typing work program, project, work package, or activity">
     </label>
     <label>
       Sample Type
@@ -31,15 +37,15 @@
     </label>
     <label>
       Created By
-      <input name="created_by" autocomplete="off">
+      <input name="created_by" data-employee-autocomplete autocomplete="off" placeholder="Start typing a name or email">
     </label>
     <label>
       Current Owner
-      <input name="current_owner" autocomplete="off">
+      <input name="current_owner" data-employee-autocomplete autocomplete="off" placeholder="Start typing a name or email">
     </label>
     <label>
       Current Location
-      <input name="current_location" autocomplete="off">
+      <input name="current_location" data-denodo-autocomplete="location" autocomplete="off" placeholder="Start typing a storage location">
     </label>
     <label>
       Status
@@ -49,9 +55,10 @@
     <div class="checklist-builder">
       <label>
         Characterization Needed
-        <span class="hint">Enter one characterization type at a time, then click Add.</span>
-        <div class="inline-row">
+        <span class="hint">Enter one characterization type at a time. Optionally assign it to a person or email.</span>
+        <div class="inline-row char-add-row">
           <input id="char-input" autocomplete="off" placeholder="Example: SEM, XRD, FTIR, mass, microscopy">
+          <input id="char-assigned-input" data-employee-autocomplete autocomplete="off" placeholder="Start typing a name or email">
           <button class="button" type="button" id="add-char-button">Add</button>
         </div>
       </label>
@@ -62,16 +69,16 @@
       Notes
       <textarea name="notes" rows="4"></textarea>
     </label>
-    <button class="button primary" type="submit">Assign QR Code to Sample</button>
+    <button class="button primary" type="submit">{{ 'Create Manual Sample' if manual_entry else 'Assign Code to Sample' }}</button>
   </form>
 </section>
 
 <script>
 (function () {
   const input = document.getElementById("char-input");
+  const assignedInput = document.getElementById("char-assigned-input");
   const button = document.getElementById("add-char-button");
   const list = document.getElementById("char-list");
-  const form = document.getElementById("sample-form");
 
   function refreshEmptyState() {
     if (list.querySelector(".check-item")) {
@@ -84,6 +91,7 @@
 
   function addCharacterization() {
     const value = input.value.trim();
+    const assignedTo = assignedInput.value.trim();
     if (!value) return;
     if (list.classList.contains("empty")) {
       list.textContent = "";
@@ -97,8 +105,17 @@
     mark.className = "check-mark";
     mark.textContent = "✓";
 
-    const text = document.createElement("span");
+    const main = document.createElement("div");
+    main.className = "check-main";
+    const text = document.createElement("strong");
     text.textContent = value;
+    main.appendChild(text);
+    if (assignedTo) {
+      const assigned = document.createElement("span");
+      assigned.className = "muted";
+      assigned.textContent = "Assigned to " + assignedTo;
+      main.appendChild(assigned);
+    }
 
     const remove = document.createElement("button");
     remove.type = "button";
@@ -109,22 +126,35 @@
       refreshEmptyState();
     });
 
-    const hidden = document.createElement("input");
-    hidden.type = "hidden";
-    hidden.name = "characterization_type";
-    hidden.value = value;
+    const hiddenType = document.createElement("input");
+    hiddenType.type = "hidden";
+    hiddenType.name = "characterization_type";
+    hiddenType.value = value;
+
+    const hiddenAssigned = document.createElement("input");
+    hiddenAssigned.type = "hidden";
+    hiddenAssigned.name = "characterization_assigned_to";
+    hiddenAssigned.value = assignedTo;
 
     item.appendChild(mark);
-    item.appendChild(text);
+    item.appendChild(main);
     item.appendChild(remove);
-    item.appendChild(hidden);
+    item.appendChild(hiddenType);
+    item.appendChild(hiddenAssigned);
     list.appendChild(item);
     input.value = "";
+    assignedInput.value = "";
     input.focus();
   }
 
   button.addEventListener("click", addCharacterization);
   input.addEventListener("keydown", function (event) {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      addCharacterization();
+    }
+  });
+  assignedInput.addEventListener("keydown", function (event) {
     if (event.key === "Enter") {
       event.preventDefault();
       addCharacterization();

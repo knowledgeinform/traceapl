@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-title">
+  <h1>Edit Sample</h1>
+  <p>Admin-only editing for {{ sample.sample_id }}. The QR/barcode tracking value is preserved.</p>
+</section>
+
+<section class="card narrow">
+  <form method="post" class="form">
+    <label>
+      Tracking code
+      <input value="{{ sample.qr_code_value }}" readonly>
+    </label>
+    <label>Sample ID <span class="required">required</span><input name="sample_id" value="{{ sample.sample_id }}" required></label>
+    <label>Sample Type<input name="sample_type" value="{{ sample.sample_type or '' }}"></label>
+    <label>Batch / Lot<input name="batch_lot" value="{{ sample.batch_lot or '' }}"></label>
+    <label>Current Owner<input name="current_owner" data-employee-autocomplete value="{{ sample.current_owner or '' }}" autocomplete="off"></label>
+    <label>Current Location<input name="current_location" data-denodo-autocomplete="location" value="{{ sample.current_location or '' }}" autocomplete="off"></label>
+    <label>Status<input name="status" value="{{ sample.status or '' }}"></label>
+    <label>Work Program<input name="work_program" data-denodo-autocomplete="work-program" value="{{ sample.work_program or sample.project or '' }}" autocomplete="off"></label>
+    <label>Notes<textarea name="notes" rows="5">{{ sample.notes or '' }}</textarea></label>
+    <div class="actions compact">
+      <button class="button primary" type="submit">Save Changes</button>
+      <a class="button" href="{{ url_for('sample_detail', qr_code_value=sample.qr_code_value) }}">Cancel</a>
+    </div>
+  </form>
+</section>
+{% endblock %}

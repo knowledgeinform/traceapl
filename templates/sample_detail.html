@@ -4,14 +4,22 @@
   <div class="split-title">
     <div>
       <h1>{{ sample.sample_id }}</h1>
-      <p class="muted">QR: {{ sample.qr_code_value }}</p>
+      {% if is_manual_sample %}
+      <p class="muted">Manual entry · Internal tracking key: {{ sample.qr_code_value }}</p>
+      {% else %}
+      <p class="muted">Code: {{ sample.qr_code_value }}</p>
+      {% endif %}
     </div>
-    <a class="button" href="{{ url_for('scan', mode='lookup') }}">Scan Another</a>
+    <div class="actions compact">
+      <a class="button primary" href="{{ url_for('sample_label', qr_code_value=sample.qr_code_value) }}">Reprint QR Code</a>
+      {% if is_admin %}<a class="button" href="{{ url_for('edit_sample', qr_code_value=sample.qr_code_value) }}">Edit Sample</a>{% endif %}
+      <a class="button" href="{{ url_for('scan', mode='lookup') }}">Scan Another</a>
+      <a class="button" href="{{ url_for('manual_sample') }}">Manual Entry</a>
+    </div>
   </div>
 
   <div class="details">
-    <div><strong>Project</strong><span>{{ sample.project }}</span></div>
-    <div><strong>Task</strong><span>{{ sample.task }}</span></div>
+    <div><strong>Work Program</strong><span>{% if sample.work_program %}<a href="{{ url_for('work_program_portal', work_program_name=sample.work_program) }}">{{ sample.work_program }}</a>{% else %}—{% endif %}</span></div>
     <div><strong>Type</strong><span>{{ sample.sample_type }}</span></div>
     <div><strong>Batch / Lot</strong><span>{{ sample.batch_lot }}</span></div>
     <div><strong>Status</strong><span>{{ sample.status }}</span></div>
@@ -36,6 +44,7 @@
 
   <form method="post" action="{{ url_for('add_characterization', qr_code_value=sample.qr_code_value) }}" class="inline-form">
     <input name="characterization_type" placeholder="Add characterization type, e.g. SEM, XRD, FTIR" autocomplete="off">
+    <input name="assigned_to" data-employee-autocomplete placeholder="Start typing a name or email" autocomplete="off">
     <input name="notes" placeholder="Optional notes" autocomplete="off">
     <button class="button" type="submit">Add</button>
   </form>
@@ -47,18 +56,25 @@
           <span class="check-mark">✓</span>
           <div class="check-main">
             <strong>{{ c.characterization_type }}</strong>
+            {% if c.assigned_to %}<span class="muted">Assigned to {{ c.assigned_to }}</span>{% endif %}
             {% if c.completed_at %}
               <span class="muted">Completed {{ c.completed_at }} by {{ c.completed_by }}</span>
               {% if c.data_location %}<span><strong>Data location:</strong> {{ c.data_location }}</span>{% endif %}
             {% else %}
               <span class="muted">Needed. Added {{ c.created_at }}</span>
+              {% if c.assigned_to and '@' in c.assigned_to %}
+                <a class="small-link" href="mailto:{{ c.assigned_to }}?subject=TraceAPL characterization assigned: {{ c.characterization_type | urlencode }} for {{ sample.sample_id | urlencode }}">Email assignee</a>
+              {% endif %}
             {% endif %}
             {% if c.notes %}<span>{{ c.notes }}</span>{% endif %}
+            {% if is_admin %}
+              <a class="small-link" href="{{ url_for('edit_characterization', qr_code_value=sample.qr_code_value, char_id=c.id) }}">Edit characterization</a>
+            {% endif %}
           </div>
           {% if not c.completed_at %}
             <form method="post" action="{{ url_for('complete_characterization', qr_code_value=sample.qr_code_value, char_id=c.id) }}" class="complete-form">
-              <input name="completed_by" placeholder="Completed by" required autocomplete="off">
-              <input name="data_location" placeholder="Data location / folder / link" autocomplete="off">
+              <input name="completed_by" data-employee-autocomplete placeholder="Completed by" required autocomplete="off">
+              <input name="data_location" data-denodo-autocomplete="location" placeholder="Data location / storage location / folder / link" autocomplete="off">
               <input name="completion_notes" placeholder="Optional result/notes" autocomplete="off">
               <button class="button primary" type="submit">Mark Complete</button>
             </form>
@@ -80,11 +96,11 @@
     </label>
     <label>
       Hand Off To <span class="required">required</span>
-      <input name="to_person" required autocomplete="off">
+      <input name="to_person" data-employee-autocomplete required autocomplete="off" placeholder="Start typing a name or email">
     </label>
     <label>
       New Location
-      <input name="to_location" autocomplete="off">
+      <input name="to_location" data-denodo-autocomplete="location" autocomplete="off" placeholder="Start typing a storage location">
     </label>
     <label>
       New Status
@@ -142,4 +158,28 @@
     {% endif %}
   </div>
 </section>
+
+{% if is_admin %}
+<section class="card danger-zone">
+  <h2>Archive Sample Entry</h2>
+  <p class="muted">This admin-only action removes the sample from active views without deleting its database history. TraceAPL creates a pre-archive backup, and admins can restore archived samples later.</p>
+  <form method="post" action="{{ url_for('delete_sample', qr_code_value=sample.qr_code_value) }}" class="form" onsubmit="return confirm('Archive this sample entry? It can be restored by an admin.');">
+    <label>
+      Type Sample ID to confirm: <strong>{{ sample.sample_id }}</strong>
+      <input name="confirm_sample_id" autocomplete="off" required>
+    </label>
+    <label>
+      Archive reason
+      <textarea name="delete_reason" rows="3"></textarea>
+    </label>
+    <button class="button danger" type="submit">Archive Entry</button>
+  </form>
+</section>
+{% else %}
+<section class="card admin-note">
+  <h2>Administrative actions</h2>
+  <p class="muted">Sample editing and archival are restricted to TraceAPL admins.</p>
+  <a class="button" href="{{ url_for('admin_login', next=request.url) }}">Admin Login</a>
+</section>
+{% endif %}
 {% endblock %}

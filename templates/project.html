@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="project-hero">
+  <div>
+    <div class="eyebrow">Work Program Portal</div>
+    <h1>{{ work_program_name }}</h1>
+    <p>Work-program-specific sample records, handoffs, and characterization progress.</p>
+  </div>
+  <div class="actions">
+    <a class="button primary" href="{{ url_for('scan', mode='assign') }}">Assign Code</a>
+    <a class="button ghost" href="{{ url_for('search', q=work_program_name if not is_unassigned else '') }}">Search This Work Program</a>
+  </div>
+</section>
+
+<section class="metric-grid">
+  <div class="metric-card">
+    <span class="metric-label">Samples</span>
+    <strong class="metric-value">{{ sample_count }}</strong>
+    <span class="metric-note">In this work-program portal</span>
+  </div>
+  <div class="metric-card">
+    <span class="metric-label">Characterizations logged</span>
+    <strong class="metric-value">{{ completed_characterization_count }}</strong>
+    <span class="metric-note">Completed checklist actions</span>
+  </div>
+  <div class="metric-card">
+    <span class="metric-label">Characterizations pending</span>
+    <strong class="metric-value">{{ pending_characterization_count }}</strong>
+    <span class="metric-note">Open checklist actions</span>
+  </div>
+</section>
+
+<section class="grid two">
+  <div class="card">
+    <h2>Samples</h2>
+    {% if samples %}
+      <table>
+        <thead><tr><th>Sample</th><th>Code</th><th>Type</th><th>Owner</th><th>Status</th></tr></thead>
+        <tbody>
+          {% for sample in samples %}
+          <tr>
+            <td><a href="{{ url_for('sample_detail', qr_code_value=sample.qr_code_value) }}">{{ sample.sample_id }}</a></td>
+            <td>{{ sample.qr_code_value }}</td>
+            <td>{{ sample.sample_type }}</td>
+            <td>{{ sample.current_owner }}</td>
+            <td>{{ sample.status }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p>No samples are assigned to this work program yet.</p>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <h2>Recent work-program handoffs</h2>
+    {% if recent_handoffs %}
+      <table>
+        <thead><tr><th>Sample</th><th>From</th><th>To</th><th>Time</th></tr></thead>
+        <tbody>
+          {% for h in recent_handoffs %}
+          <tr>
+            <td><a href="{{ url_for('sample_detail', qr_code_value=h.qr_code_value) }}">{{ h.sample_id }}</a></td>
+            <td>{{ h.from_person }}</td>
+            <td>{{ h.to_person }}</td>
+            <td>{{ h.timestamp }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p>No handoffs recorded for this work program yet.</p>
+    {% endif %}
+  </div>
+</section>
+{% endblock %}

@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-title">
+  <h1>Archived Samples</h1>
+  <p>Admin-only restore area for samples removed from active TraceAPL views.</p>
+</section>
+
+<section class="card">
+  {% if deleted_samples %}
+  <table>
+    <thead><tr><th>Sample</th><th>Code</th><th>Archived</th><th>By</th><th>Reason</th><th>Action</th></tr></thead>
+    <tbody>
+      {% for sample in deleted_samples %}
+      <tr>
+        <td>{{ sample.sample_id }}</td>
+        <td>{{ sample.qr_code_value }}</td>
+        <td>{{ sample.deleted_at }}</td>
+        <td>{{ sample.deleted_by }}</td>
+        <td>{{ sample.delete_reason }}</td>
+        <td>
+          <form method="post" action="{{ url_for('restore_sample', qr_code_value=sample.qr_code_value) }}" onsubmit="return confirm('Restore this sample to active TraceAPL views?');">
+            <button class="button" type="submit">Restore</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    <p>No archived samples.</p>
+  {% endif %}
+</section>
+{% endblock %}

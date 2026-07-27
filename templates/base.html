@@ -2,17 +2,30 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Sample QR Tracker</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#020b1d">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="TraceAPL">
+  <title>TraceAPL</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
 </head>
 <body>
   <header class="topbar">
-    <a class="brand" href="{{ url_for('home') }}">Sample QR Tracker</a>
+    <a class="brand" href="{{ url_for('home') }}">
+      <img class="brand-wordmark" src="{{ url_for('static', filename='traceapl-wordmark.svg') }}" alt="TraceAPL">
+    </a>
     <nav>
-      <a href="{{ url_for('scan', mode='assign') }}">Assign QR</a>
-      <a href="{{ url_for('scan', mode='lookup') }}">Scan</a>
+      <a href="{{ url_for('home') }}">Home</a>
+      <a href="{{ url_for('scan', mode='assign') }}">Assign Code</a>
+      <a href="{{ url_for('scan', mode='lookup') }}">Scan Code</a>
+      <a class="mobile-nav-link" href="{{ url_for('mobile_scan', mode='lookup') }}">Mobile Scan</a>
       <a href="{{ url_for('search') }}">Search</a>
+      {% if is_admin %}
+        <a href="{{ url_for('admin_dashboard') }}">Admin</a>
+        <form class="nav-form" method="post" action="{{ url_for('admin_logout') }}"><button type="submit">Log out</button></form>
+      {% else %}
+        <a href="{{ url_for('admin_login') }}">Admin Login</a>
+      {% endif %}
     </nav>
   </header>
 
@@ -29,5 +42,6 @@
 
     {% block content %}{% endblock %}
   </main>
+  <script src="{{ url_for('static', filename='employee_autocomplete.js') }}?v=denodo_tags_1"></script>
 </body>
 </html>

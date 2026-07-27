@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="mobile-scan-shell">
+  <div class="mobile-scan-header">
+    <div>
+      <div class="eyebrow">Mobile scanner</div>
+      <h1>Scan with rear phone camera</h1>
+      <p>TraceAPL requests the back camera for QR codes or common barcodes. If scanning is blocked, the page will show a diagnostic message and you can use the manual entry field below.</p>
+    </div>
+    <div class="mobile-mode-toggle" role="group" aria-label="Scan mode">
+      <a class="mode-pill {% if mode == 'lookup' %}active{% endif %}" href="{{ url_for('mobile_scan', mode='lookup') }}">Lookup</a>
+      <a class="mode-pill {% if mode == 'assign' %}active{% endif %}" href="{{ url_for('mobile_scan', mode='assign') }}">Assign</a>
+    </div>
+  </div>
+
+  <div class="mobile-camera-card">
+    <div id="mobileReader" class="mobile-reader">
+      <div class="scanner-placeholder">
+        <strong>Rear camera scanner ready</strong>
+        <span>Tap Start Rear Camera and allow camera access.</span>
+      </div>
+    </div>
+
+    <div class="mobile-scan-status" id="scanStatus">Camera is stopped.</div>
+    <div class="mobile-scan-debug" id="cameraDebug"></div>
+
+    <div class="mobile-controls">
+      <button id="startMobileCamera" class="button primary large-touch" type="button">Start Rear Camera</button>
+      <button id="stopMobileCamera" class="button large-touch" type="button" disabled>Stop</button>
+    </div>
+
+    <p class="hint mobile-hint">
+      Tip: for QR codes, fill much of the camera view. For linear barcodes, hold the phone farther back so the full barcode is sharp and horizontal. Avoid glare. Phone camera scanning usually requires HTTPS.
+    </p>
+  </div>
+
+  <form method="post" action="{{ url_for('submit_scan') }}" class="form mobile-manual-form" id="mobileScanForm">
+    <input type="hidden" name="mode" value="{{ mode }}">
+    <label>
+      Manual QR / Barcode Value
+      <input id="mobileQrInput" name="qr_code_value" autocomplete="off" inputmode="text" placeholder="Paste, type, or scan code here">
+    </label>
+    <label>
+      Scanned By <span class="optional">optional</span>
+      <input name="scanned_by" autocomplete="name">
+    </label>
+    <button class="button primary large-touch" type="submit">Continue</button>
+  </form>
+
+  <section class="card mobile-help-card">
+    <h2>Mobile compatibility notes</h2>
+    <ul class="mobile-list">
+      <li>iOS and Android should work best over HTTPS.</li>
+      <li>TraceAPL requests the rear-facing camera only.</li>
+      <li>If the camera does not start, check the status/debug message above, confirm browser camera permission, and reload the page.</li>
+      <li>Manual entry works even if camera scanning is blocked.</li>
+    </ul>
+  </section>
+</section>
+
+<script src="{{ url_for('static', filename='vendor/html5-qrcode.min.js') }}?v=local" type="text/javascript"></script>
+<script src="{{ url_for('static', filename='mobile_scan.js') }}?v=rear_debug_2"></script>
+{% endblock %}

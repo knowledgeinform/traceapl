@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card label-toolbar no-print">
+  <div class="split-title">
+    <div>
+      <h1>Reprint QR Code</h1>
+      <p class="muted">This QR code encodes the same saved tracking value already assigned to this sample.</p>
+    </div>
+    <div class="actions compact">
+      <button class="button primary" type="button" onclick="window.print()">Print Label</button>
+      <a class="button" href="{{ url_for('sample_detail', qr_code_value=sample.qr_code_value) }}">Back to Sample</a>
+    </div>
+  </div>
+</section>
+
+<section class="print-sheet">
+  <div class="print-label">
+    <div class="label-header">
+      <img class="label-logo" src="{{ url_for('static', filename='traceapl-wordmark.svg') }}" alt="TraceAPL">
+      <span class="label-type">Tracking Label</span>
+    </div>
+
+    <div class="label-body">
+      <div class="qr-box">
+        <img src="data:image/png;base64,{{ qr_png_base64 }}" alt="QR code for {{ sample.sample_id }}">
+      </div>
+      <div class="label-meta">
+        <h2>{{ sample.sample_id }}</h2>
+        <p><strong>Work Program:</strong> {{ sample.work_program or sample.project or '—' }}</p>
+        <p><strong>Type:</strong> {{ sample.sample_type or '—' }}</p>
+        <p><strong>Batch / Lot:</strong> {{ sample.batch_lot or '—' }}</p>
+        {% if is_manual_sample %}
+          <p><strong>Tracking:</strong> Manual TraceAPL key</p>
+        {% else %}
+          <p><strong>Tracking:</strong> {{ sample.qr_code_value }}</p>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="label-footer">
+      <span>Scan to open this sample in TraceAPL.</span>
+      <span>Printed from TraceAPL</span>
+    </div>
+  </div>
+</section>
+
+<section class="card no-print">
+  <h2>How this works</h2>
+  <p>The QR code above is generated from the tracking value stored in the database. If the original barcode or QR label is lost, printing this label gives you a replacement code that resolves to the same sample record.</p>
+</section>
+{% endblock %}

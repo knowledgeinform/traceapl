@@ -1,27 +1,31 @@
 {% extends "base.html" %}
 {% block content %}
 <section class="card narrow">
-  <h1>{% if mode == 'assign' %}Assign a QR Code{% else %}Scan / Lookup Sample{% endif %}</h1>
+  <h1>{% if mode == 'assign' %}Assign a QR Code or Barcode{% else %}Scan / Lookup Sample{% endif %}</h1>
   <p>
     {% if mode == 'assign' %}
-      Scan an unused pre-printed QR label. If it is new, you will create a sample record.
+      Scan an unused pre-printed QR code or barcode. If it is new, you will create a sample record.
     {% else %}
-      Scan an assigned QR label to open the sample record and record handoffs.
+      Scan an assigned QR code or barcode to open the sample record and record handoffs.
     {% endif %}
   </p>
 
-  <div id="reader" class="scanner"></div>
-  <div class="actions compact">
-    <button id="startCamera" class="button" type="button">Start Camera Scanner</button>
-    <button id="stopCamera" class="button" type="button" disabled>Stop Camera</button>
+  <div class="scan-mode-panel">
+    <h2>Handheld scanner mode</h2>
+    <p>
+      Use this with the Zebra DS22 or another USB handheld scanner. Click in the field below and scan.
+      Most handheld scanners type the code into TraceAPL like a keyboard. If your scanner sends Enter after the scan,
+      TraceAPL will continue automatically.
+    </p>
+    <button id="focusScannerInput" class="button" type="button">Focus Scanner Field</button>
+    <label class="checkbox-line"><input id="autoSubmitScanner" type="checkbox"> Auto-submit after scanner input stops</label>
   </div>
-  <p class="hint">Camera scanning uses your browser. On phones, camera access usually requires HTTPS unless you are on localhost.</p>
 
   <form method="post" action="{{ url_for('submit_scan') }}" class="form" id="scanForm">
     <input type="hidden" name="mode" value="{{ mode }}">
     <label>
-      QR Code Value
-      <input id="qrInput" name="qr_code_value" autofocus autocomplete="off" placeholder="Scan with camera, handheld scanner, or type here">
+      QR / Barcode Value
+      <input id="qrInput" name="qr_code_value" autofocus autocomplete="off" inputmode="text" placeholder="Scan with Zebra/handheld scanner, camera, or type here">
     </label>
     <label>
       Scanned By <span class="optional">optional</span>
@@ -29,6 +33,19 @@
     </label>
     <button class="button primary" type="submit">Continue</button>
   </form>
+
+  <hr class="soft-divider">
+
+  <div class="camera-section">
+    <h2>Browser camera scanner</h2>
+    <p class="hint">Use this for laptop camera scanning. For iOS/Android, the dedicated mobile scanner is easier to use and usually requires HTTPS.</p>
+    <p><a class="button ghost" href="{{ url_for('mobile_scan', mode=mode) }}">Open Mobile-Friendly Scanner</a></p>
+    <div id="reader" class="scanner"></div>
+    <div class="actions compact">
+      <button id="startCamera" class="button" type="button">Start Camera Scanner</button>
+      <button id="stopCamera" class="button" type="button" disabled>Stop Camera</button>
+    </div>
+  </div>
 </section>
 
 <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
@@ -37,13 +54,21 @@ const qrInput = document.getElementById("qrInput");
 const form = document.getElementById("scanForm");
 const startButton = document.getElementById("startCamera");
 const stopButton = document.getElementById("stopCamera");
+const focusButton = document.getElementById("focusScannerInput");
+const autoSubmitScanner = document.getElementById("autoSubmitScanner");
 let scanner = null;
 let alreadySubmitted = false;
+let autoSubmitTimer = null;
+
+function cleanScannedCode(value) {
+  return (value || "").replace(/[\r\n\t]+/g, "").trim();
+}
 
 function submitCode(decodedText) {
-  if (alreadySubmitted) return;
+  const cleaned = cleanScannedCode(decodedText);
+  if (!cleaned || alreadySubmitted) return;
   alreadySubmitted = true;
-  qrInput.value = decodedText;
+  qrInput.value = cleaned;
   if (scanner) {
     scanner.stop().finally(() => form.submit());
   } else {
@@ -51,15 +76,40 @@ function submitCode(decodedText) {
   }
 }
 
+function refocusScannerInput() {
+  qrInput.focus();
+  qrInput.select();
+}
+
+window.addEventListener("load", refocusScannerInput);
+focusButton.addEventListener("click", refocusScannerInput);
+
 startButton.addEventListener("click", async () => {
   alreadySubmitted = false;
   scanner = new Html5Qrcode("reader");
   startButton.disabled = true;
   stopButton.disabled = false;
   try {
+    const scannerConfig = { fps: 10, qrbox: { width: 250, height: 250 } };
+    if (window.Html5QrcodeSupportedFormats) {
+      scannerConfig.formatsToSupport = [
+        Html5QrcodeSupportedFormats.QR_CODE,
+        Html5QrcodeSupportedFormats.CODE_128,
+        Html5QrcodeSupportedFormats.CODE_39,
+        Html5QrcodeSupportedFormats.CODE_93,
+        Html5QrcodeSupportedFormats.CODABAR,
+        Html5QrcodeSupportedFormats.DATA_MATRIX,
+        Html5QrcodeSupportedFormats.EAN_13,
+        Html5QrcodeSupportedFormats.EAN_8,
+        Html5QrcodeSupportedFormats.ITF,
+        Html5QrcodeSupportedFormats.PDF_417,
+        Html5QrcodeSupportedFormats.UPC_A,
+        Html5QrcodeSupportedFormats.UPC_E
+      ].filter(Boolean);
+    }
     await scanner.start(
       { facingMode: "environment" },
-      { fps: 10, qrbox: { width: 250, height: 250 } },
+      scannerConfig,
       submitCode,
       () => {}
     );
@@ -76,12 +126,25 @@ stopButton.addEventListener("click", async () => {
   }
   startButton.disabled = false;
   stopButton.disabled = true;
+  refocusScannerInput();
 });
 
 qrInput.addEventListener("keydown", (event) => {
   if (event.key === "Enter" && qrInput.value.trim()) {
     event.preventDefault();
-    form.submit();
+    submitCode(qrInput.value);
+  }
+});
+
+// Some barcode scanners do not send Enter. If the scanner types a long value very quickly,
+// this optional delay submits it after typing stops. Manual typing is still possible.
+qrInput.addEventListener("input", () => {
+  alreadySubmitted = false;
+  clearTimeout(autoSubmitTimer);
+  const value = cleanScannedCode(qrInput.value);
+  qrInput.value = value;
+  if (autoSubmitScanner.checked && value.length >= 6) {
+    autoSubmitTimer = setTimeout(() => submitCode(qrInput.value), 700);
   }
 });
 </script>

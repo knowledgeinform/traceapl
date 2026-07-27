@@ -1,35 +1,84 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="hero">
-  <h1>Track samples by pre-printed QR code</h1>
-  <p>Assign existing QR labels to samples, scan them later, and record handoffs across the team.</p>
-  <div class="actions">
-    <a class="button primary" href="{{ url_for('scan', mode='assign') }}">Assign New QR Code</a>
-    <a class="button" href="{{ url_for('scan', mode='lookup') }}">Scan / Lookup Sample</a>
-    <a class="button" href="{{ url_for('search') }}">Search Samples</a>
+<section class="welcome-hero">
+  <div class="welcome-copy">
+    <div class="eyebrow">TraceAPL Framework</div>
+    <h1>Find, track, and verify samples across the characterization workflow.</h1>
+    <p>TraceAPL connects pre-printed QR codes, barcodes, and labels, team handoffs, characterization checklists, and data locations in one searchable work-program workspace.</p>
+    <div class="actions">
+      <a class="button primary" href="{{ url_for('scan', mode='assign') }}">Assign New QR / Barcode</a>
+      <a class="button ghost" href="{{ url_for('manual_sample') }}">Manually Enter Sample</a>
+      <a class="button ghost" href="{{ url_for('scan', mode='lookup') }}">Scan / Lookup Sample</a>
+      <a class="button ghost mobile-primary-action" href="{{ url_for('mobile_scan', mode='lookup') }}">Phone Camera Scan</a>
+      <a class="button ghost" href="{{ url_for('search') }}">Search Samples</a>
+    </div>
   </div>
+</section>
+
+<section class="metric-grid">
+  <div class="metric-card">
+    <span class="metric-label">Recently added samples</span>
+    <strong class="metric-value">{{ recent_week_count }}</strong>
+    <span class="metric-note">Added in the last 7 days</span>
+  </div>
+  <div class="metric-card">
+    <span class="metric-label">Characterizations logged</span>
+    <strong class="metric-value">{{ completed_characterization_count }}</strong>
+    <span class="metric-note">Completed checklist actions</span>
+  </div>
+  <div class="metric-card">
+    <span class="metric-label">Characterizations pending</span>
+    <strong class="metric-value">{{ pending_characterization_count }}</strong>
+    <span class="metric-note">Open checklist actions</span>
+  </div>
+</section>
+
+<section class="card">
+  <div class="split-title">
+    <div>
+      <h2>Work Program portals</h2>
+      <p class="muted">Open a work-program-specific view of samples, handoffs, and characterization progress within TraceAPL.</p>
+    </div>
+  </div>
+
+  {% if work_program_portals %}
+    <div class="portal-grid">
+      {% for program in work_program_portals %}
+      <a class="portal-card" href="{{ url_for('work_program_portal', work_program_name=program.work_program_name) }}">
+        <span class="portal-icon">⌁</span>
+        <span class="portal-title">{{ program.work_program_name }}</span>
+        <span class="portal-meta">{{ program.sample_count }} sample{% if program.sample_count != 1 %}s{% endif %}</span>
+        <span class="portal-stats">
+          <span>{{ program.completed_characterizations or 0 }} completed</span>
+          <span>{{ program.pending_characterizations or 0 }} pending</span>
+        </span>
+      </a>
+      {% endfor %}
+    </div>
+  {% else %}
+    <p>No work-program portals yet. Create a sample with a Work Program value to add one automatically.</p>
+  {% endif %}
 </section>
 
 <section class="grid two">
   <div class="card">
-    <h2>Recent samples</h2>
-    {% if recent_samples %}
+    <h2>Recently added samples</h2>
+    {% if recent_week_samples %}
       <table>
-        <thead><tr><th>Sample</th><th>Project</th><th>Task</th><th>Owner</th><th>Status</th></tr></thead>
+        <thead><tr><th>Sample</th><th>Work Program</th><th>Owner</th><th>Added</th></tr></thead>
         <tbody>
-          {% for sample in recent_samples %}
+          {% for sample in recent_week_samples %}
           <tr>
             <td><a href="{{ url_for('sample_detail', qr_code_value=sample.qr_code_value) }}">{{ sample.sample_id }}</a></td>
-            <td>{{ sample.project }}</td>
-            <td>{{ sample.task }}</td>
+            <td>{{ sample.work_program }}</td>
             <td>{{ sample.current_owner }}</td>
-            <td>{{ sample.status }}</td>
+            <td>{{ sample.created_at }}</td>
           </tr>
           {% endfor %}
         </tbody>
       </table>
     {% else %}
-      <p>No samples yet.</p>
+      <p>No samples were added in the last 7 days.</p>
     {% endif %}
   </div>
 
@@ -37,7 +86,7 @@
     <h2>Recent handoffs</h2>
     {% if recent_handoffs %}
       <table>
-        <thead><tr><th>QR</th><th>From</th><th>To</th><th>Time</th></tr></thead>
+        <thead><tr><th>Code</th><th>From</th><th>To</th><th>Time</th></tr></thead>
         <tbody>
           {% for h in recent_handoffs %}
           <tr>
@@ -55,13 +104,27 @@
   </div>
 </section>
 
-<section class="card">
-  <h2>Export</h2>
-  <div class="actions compact">
-    <a class="button" href="{{ url_for('export', kind='samples') }}">Export Samples CSV</a>
-    <a class="button" href="{{ url_for('export', kind='handoffs') }}">Export Handoffs CSV</a>
-    <a class="button" href="{{ url_for('export', kind='scans') }}">Export Scan Events CSV</a>
-    <a class="button" href="{{ url_for('export', kind='characterizations') }}">Export Characterizations CSV</a>
+<section class="grid two">
+  <div class="card">
+    <h2>Export</h2>
+    <div class="actions compact">
+      <a class="button" href="{{ url_for('export', kind='samples') }}">Export Samples CSV</a>
+      <a class="button" href="{{ url_for('export', kind='handoffs') }}">Export Handoffs CSV</a>
+      <a class="button" href="{{ url_for('export', kind='scans') }}">Export Scan Events CSV</a>
+      <a class="button" href="{{ url_for('export', kind='characterizations') }}">Export Characterizations CSV</a>
+    </div>
+  </div>
+
+  <div class="card backup-card">
+    <h2>Administration</h2>
+    <p class="muted">Database backup controls and sample removal are restricted to TraceAPL admins.</p>
+    <div class="actions compact">
+      {% if is_admin %}
+        <a class="button" href="{{ url_for('admin_dashboard') }}">Open Admin Dashboard</a>
+      {% else %}
+        <a class="button" href="{{ url_for('admin_login') }}">Admin Login</a>
+      {% endif %}
+    </div>
   </div>
 </section>
 {% endblock %}

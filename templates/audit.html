@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-title">
+  <h1>Audit Trail</h1>
+  <p>Recent admin edits, archives, and restores.</p>
+</section>
+
+<section class="card">
+  {% if events %}
+  <table>
+    <thead><tr><th>Time</th><th>Actor</th><th>Action</th><th>Entity</th><th>Details</th></tr></thead>
+    <tbody>
+      {% for event in events %}
+      <tr>
+        <td>{{ event.timestamp }}</td>
+        <td>{{ event.actor }}</td>
+        <td>{{ event.action }}</td>
+        <td>{{ event.entity_type }}: {{ event.entity_id }}</td>
+        <td><code>{{ event.details }}</code></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    <p>No audit events recorded yet.</p>
+  {% endif %}
+</section>
+{% endblock %}
