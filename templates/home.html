@@ -8,6 +8,7 @@
     <div class="actions">
       <a class="button primary" href="{{ url_for('scan', mode='assign') }}">Assign New QR / Barcode</a>
       <a class="button ghost" href="{{ url_for('manual_sample') }}">Manually Enter Sample</a>
+      <a class="button ghost" href="{{ url_for('generated_sample') }}">Generate QR From Scratch</a>
       <a class="button ghost" href="{{ url_for('scan', mode='lookup') }}">Scan / Lookup Sample</a>
       <a class="button ghost mobile-primary-action" href="{{ url_for('mobile_scan', mode='lookup') }}">Phone Camera Scan</a>
       <a class="button ghost" href="{{ url_for('search') }}">Search Samples</a>

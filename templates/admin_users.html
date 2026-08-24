@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-title">
+  <h1>User Management</h1>
+  <p>Manage self-registered TraceAPL user accounts. The built-in <code>{{ admin_username }}</code> administrator account is controlled by server environment variables and is not listed here.</p>
+  <p class="muted">Password resets must use at least 15 characters, include at least 3 of 4 types (lowercase, uppercase, number, special character), and may not include the user's TraceAPL/JHU/APL username.</p>
+  <p class="muted">Password resets must use at least 15 characters, include at least 3 of 4 types (lowercase, uppercase, number, special character), and may not include the user's TraceAPL/JHU/APL username.</p>
+</section>
+
+<section class="card">
+  <h2>Registered Users</h2>
+  {% if users %}
+    <table class="user-table">
+      <thead>
+        <tr>
+          <th>Username</th>
+          <th>Status</th>
+          <th>Role</th>
+          <th>Created</th>
+          <th>Last login</th>
+          <th>Reset password</th>
+          <th>Access</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for user in users %}
+          <tr>
+            <td><strong>{{ user.username }}</strong></td>
+            <td>{{ "Active" if user.is_active else "Disabled" }}</td>
+            <td>{{ user.role }}</td>
+            <td>{{ user.created_at }}</td>
+            <td>{{ user.last_login_at or "—" }}</td>
+            <td>
+              <form class="user-reset-form" method="post" action="{{ url_for('admin_reset_user_password', user_id=user.id) }}">
+                <input type="password" name="new_password" placeholder="New password" minlength="15" required>
+                <input type="password" name="confirm_password" placeholder="Confirm" minlength="15" required>
+                <button class="button" type="submit">Reset</button>
+              </form>
+            </td>
+            <td>
+              <form method="post" action="{{ url_for('admin_toggle_user_active', user_id=user.id) }}">
+                <button class="button" type="submit">{{ "Disable" if user.is_active else "Enable" }}</button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="muted">No user accounts have been created yet.</p>
+  {% endif %}
+</section>
+{% endblock %}

@@ -17,12 +17,13 @@
     <nav>
       <a href="{{ url_for('home') }}">Home</a>
       <a href="{{ url_for('scan', mode='assign') }}">Assign Code</a>
+      <a href="{{ url_for('generated_sample') }}">Generate QR</a>
       <a href="{{ url_for('scan', mode='lookup') }}">Scan Code</a>
       <a class="mobile-nav-link" href="{{ url_for('mobile_scan', mode='lookup') }}">Mobile Scan</a>
       <a href="{{ url_for('search') }}">Search</a>
       {% if is_admin %}
         <a href="{{ url_for('admin_dashboard') }}">Admin</a>
-        <form class="nav-form" method="post" action="{{ url_for('admin_logout') }}"><button type="submit">Log out</button></form>
+        <form class="nav-form" method="post" action="{{ url_for('logout') }}"><button type="submit">Log out admin</button></form>
       {% else %}
         <a href="{{ url_for('admin_login') }}">Admin Login</a>
       {% endif %}

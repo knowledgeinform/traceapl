@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card auth-card">
+  <h1>Create TraceAPL Account</h1>
+  <p class="muted">Create a normal user account. The username <code>admin</code> is reserved for the built-in administrator account.</p>
+  <form method="post" class="form">
+    <input type="hidden" name="next" value="{{ next_url }}">
+    <label>
+      Username
+      <input type="text" name="username" autocomplete="username" required autofocus>
+      <span class="hint">3-64 characters. Letters, numbers, dots, hyphens, and underscores are allowed. Do not use the reserved username <code>admin</code>.</span>
+    </label>
+    <label>
+      Password
+      <input type="password" name="password" autocomplete="new-password" minlength="15" required>
+      <span class="hint">Minimum 15 characters. Include at least 3 of 4 types: lowercase, uppercase, number, special character. Password may not include your TraceAPL/JHU/APL username.</span>
+    </label>
+    <label>
+      Confirm password
+      <input type="password" name="confirm_password" autocomplete="new-password" minlength="15" required>
+    </label>
+    <button class="button primary" type="submit">Create Account</button>
+  </form>
+  <div class="auth-links">
+    <a href="{{ url_for('login', next=next_url) }}">Already have an account? Log in</a>
+  </div>
+</section>
+{% endblock %}

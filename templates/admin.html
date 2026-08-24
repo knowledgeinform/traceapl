@@ -29,6 +29,9 @@
     <div class="actions compact">
       <a class="button" href="{{ url_for('admin_deleted_samples') }}">Archived Samples</a>
       <a class="button" href="{{ url_for('admin_audit') }}">Audit Trail</a>
+      <a class="button" href="{{ url_for('admin_system_audit') }}">System Audit Log</a>
+      <a class="button" href="{{ url_for('admin_users') }}">Manage Users</a>
+      <a class="button" href="{{ url_for('admin_work_auth_sync') }}">CHAR HAND OFF Sync</a>
       <form method="post" action="{{ url_for('run_reminders_now') }}">
         <button class="button" type="submit">Run Reminder Check</button>
       </form>

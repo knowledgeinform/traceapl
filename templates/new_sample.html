@@ -4,20 +4,26 @@
   {% if manual_entry %}
     <h1>Manually Enter Sample</h1>
     <p>Create a sample record without scanning or assigning a physical code. TraceAPL will use the Sample ID as the manual tracking key.</p>
+  {% elif generated_entry|default(false) %}
+    <h1>Create Sample and Generate QR</h1>
+    <p>Create the sample now with a TraceAPL-generated tracking value. You can print the custom QR code later from the sample page.</p>
   {% else %}
     <h1>Create Sample Record</h1>
     <p>This scanned code is not assigned yet. Fill out the sample fields to claim it.</p>
   {% endif %}
 
-  <form method="post" action="{{ url_for('create_sample') }}" class="form" id="sample-form">
-    <input type="hidden" name="entry_mode" value="{{ 'manual' if manual_entry else 'qr' }}">
+  <form method="post" action="{{ url_for('create_sample') }}" class="form" id="sample-form" enctype="multipart/form-data">
+    <input type="hidden" name="entry_mode" value="{{ 'manual' if manual_entry else ('generated' if generated_entry|default(false) else 'qr') }}">
     {% if manual_entry %}
-      <div class="notice soft">Manual entries can still be searched, handed off, and assigned characterization tasks. They just will not have a physical QR/barcode label unless one is added later.</div>
+      <div class="notice soft">Manual entries can still be searched, handed off, and assigned characterization tasks. To create a printable QR label later, use <a href="{{ url_for('generated_sample') }}">Generate QR</a> instead.</div>
     {% else %}
       <label>
-        Scanned Code Value
+        {{ 'Generated Code Value' if generated_entry|default(false) else 'Scanned Code Value' }}
         <input name="qr_code_value" value="{{ qr_code_value }}" readonly>
       </label>
+      {% if generated_entry|default(false) %}
+        <div class="notice soft">This value will be encoded in the printable QR label. No preprinted sticker is required.</div>
+      {% endif %}
     {% endif %}
     <label>
       Sample ID <span class="required">required</span>
@@ -66,10 +72,19 @@
     </div>
 
     <label>
+      Optional Sample Photo
+      <input type="file" name="sample_photo" accept="image/jpeg,image/png,image/gif,image/webp">
+      <span class="hint">Optional. JPG, PNG, GIF, or WEBP up to the configured size limit.</span>
+    </label>
+    <label>
+      Photo Caption
+      <input name="sample_photo_caption" autocomplete="off" placeholder="Optional photo description">
+    </label>
+    <label>
       Notes
       <textarea name="notes" rows="4"></textarea>
     </label>
-    <button class="button primary" type="submit">{{ 'Create Manual Sample' if manual_entry else 'Assign Code to Sample' }}</button>
+    <button class="button primary" type="submit">{{ 'Create Manual Sample' if manual_entry else ('Create Sample and Generate QR' if generated_entry|default(false) else 'Assign Code to Sample') }}</button>
   </form>
 </section>
 

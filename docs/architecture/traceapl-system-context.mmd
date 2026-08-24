@@ -1,0 +1,19 @@
+flowchart LR
+    User[TraceAPL User] --> Browser[Web Browser]
+    Admin[TraceAPL Admin] --> Browser
+    Browser --> TraceAPL[TraceAPL Flask Application]
+
+    TraceAPL --> SQLite[(SQLite Sample Tracker Database)]
+    TraceAPL --> Backups[(Local Backup Folder)]
+    TraceAPL --> Denodo[Denodo REST Services]
+    TraceAPL --> SMTP[APL SMTP Service]
+    TraceAPL --> Scanner[Local html5-qrcode Library]
+
+    TraceAPL --> Audit[(System Audit Log)]
+
+    subgraph ProtectedEnvironment[Protected APL/SSO/Network Boundary]
+        TraceAPL
+        SQLite
+        Backups
+        Audit
+    end

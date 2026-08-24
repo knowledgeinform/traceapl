@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-title">
+  <h1>System Audit Log</h1>
+  <p>Admin-only security and system activity records. Retention: {{ retention_days }} days. Total retained events: {{ total }}.</p>
+</section>
+
+<section class="card">
+  <form method="get" class="grid three compact-form">
+    <label>Event type
+      <input type="text" name="event_type" value="{{ event_type }}" placeholder="login_failed, data_export, ...">
+    </label>
+    <label>Username
+      <input type="text" name="username" value="{{ username }}" placeholder="username">
+    </label>
+    <label>Outcome
+      <select name="outcome">
+        <option value="" {% if not outcome %}selected{% endif %}>Any</option>
+        <option value="success" {% if outcome == 'success' %}selected{% endif %}>success</option>
+        <option value="failure" {% if outcome == 'failure' %}selected{% endif %}>failure</option>
+      </select>
+    </label>
+    <div class="actions compact">
+      <button class="button" type="submit">Filter</button>
+      <a class="button secondary" href="{{ url_for('admin_system_audit') }}">Clear</a>
+      <a class="button" href="{{ url_for('export_system_audit') }}">Export CSV</a>
+    </div>
+  </form>
+</section>
+
+<section class="card">
+  {% if events %}
+  <table>
+    <thead>
+      <tr>
+        <th>Time</th>
+        <th>User</th>
+        <th>Role</th>
+        <th>Event</th>
+        <th>Outcome</th>
+        <th>Target</th>
+        <th>IP</th>
+        <th>Path</th>
+        <th>Details</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for event in events %}
+      <tr>
+        <td>{{ event.timestamp }}</td>
+        <td>{{ event.username }}</td>
+        <td>{{ event.role }}</td>
+        <td>{{ event.event_type }}</td>
+        <td>{{ event.outcome }}</td>
+        <td>{{ event.target_type }}{% if event.target_id %}: {{ event.target_id }}{% endif %}</td>
+        <td>{{ event.ip_address }}</td>
+        <td>{{ event.method }} {{ event.path }}</td>
+        <td><code>{{ event.details }}</code></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    <p>No system audit events match this filter.</p>
+  {% endif %}
+</section>
+{% endblock %}

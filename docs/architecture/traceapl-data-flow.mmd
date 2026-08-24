@@ -1,0 +1,20 @@
+flowchart LR
+    Browser[Authenticated Browser User] --> Create[Create or Scan Sample]
+    Create --> App[TraceAPL Application]
+    App --> Samples[(Samples)]
+    App --> Handoffs[(Handoff Records)]
+    App --> Characterization[(Characterization Tasks)]
+    App --> Audit[(System Audit Log)]
+
+    App --> Labels[QR Label Generation]
+    App --> Exports[CSV Exports]
+    App --> Backups[(Database Backups)]
+
+    App --> Denodo[Denodo Lookups: Person / Work Program / Location]
+    App --> SMTP[Assignment and Reminder Emails]
+
+    Admin[Admin User] --> AdminTools[Admin Tools]
+    AdminTools --> App
+    AdminTools --> Audit
+    AdminTools --> Backups
+    AdminTools --> Exports

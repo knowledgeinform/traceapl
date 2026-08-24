@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card auth-card">
+  <h1>Admin login</h1>
+  <p class="muted">Normal TraceAPL sample-tracking workflows do not require a TraceAPL username or password. Use this page only for administrator functions.</p>
+  <form method="post" class="form">
+    <input type="hidden" name="next" value="{{ next_url }}">
+    <label>
+      Admin username
+      <input type="text" name="username" autocomplete="username" value="admin" required autofocus>
+    </label>
+    <label>
+      Admin password
+      <input type="password" name="password" autocomplete="current-password" required>
+    </label>
+    <button class="button primary" type="submit">Log in as admin</button>
+  </form>
+  <div class="auth-links">
+    <a href="{{ url_for('home') }}">Return to TraceAPL</a>
+  </div>
+</section>
+{% endblock %}

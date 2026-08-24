@@ -6,6 +6,8 @@
       <h1>{{ sample.sample_id }}</h1>
       {% if is_manual_sample %}
       <p class="muted">Manual entry · Internal tracking key: {{ sample.qr_code_value }}</p>
+      {% elif is_generated_sample %}
+      <p class="muted">TraceAPL-generated QR value: {{ sample.qr_code_value }}</p>
       {% else %}
       <p class="muted">Code: {{ sample.qr_code_value }}</p>
       {% endif %}
@@ -15,6 +17,7 @@
       {% if is_admin %}<a class="button" href="{{ url_for('edit_sample', qr_code_value=sample.qr_code_value) }}">Edit Sample</a>{% endif %}
       <a class="button" href="{{ url_for('scan', mode='lookup') }}">Scan Another</a>
       <a class="button" href="{{ url_for('manual_sample') }}">Manual Entry</a>
+      <a class="button" href="{{ url_for('generated_sample') }}">Generate QR</a>
     </div>
   </div>
 
@@ -31,6 +34,52 @@
   {% if sample.notes %}
     <h2>Notes</h2>
     <p>{{ sample.notes }}</p>
+  {% endif %}
+</section>
+
+<section class="card">
+  <div class="split-title">
+    <div>
+      <h2>Sample Photos</h2>
+      <p class="muted">Optional photos provide another way to identify and track physical materials.</p>
+    </div>
+  </div>
+
+  <form method="post" action="{{ url_for('upload_sample_photo', qr_code_value=sample.qr_code_value) }}" class="form photo-upload-form" enctype="multipart/form-data">
+    <label>
+      Upload Photo
+      <input type="file" name="sample_photo" accept="image/jpeg,image/png,image/gif,image/webp" required>
+      <span class="hint">JPG, PNG, GIF, or WEBP. Do not upload content that is not authorized for this TraceAPL instance.</span>
+    </label>
+    <label>
+      Caption
+      <input name="sample_photo_caption" autocomplete="off" placeholder="Optional photo description">
+    </label>
+    <button class="button" type="submit">Upload Photo</button>
+  </form>
+
+  {% if photos %}
+    <div class="photo-grid">
+      {% for photo in photos %}
+        <figure class="sample-photo-card">
+          <a href="{{ url_for('sample_photo_file', photo_id=photo.id) }}" target="_blank" rel="noopener">
+            <img src="{{ url_for('sample_photo_file', photo_id=photo.id) }}" alt="Sample photo {{ loop.index }} for {{ sample.sample_id }}">
+          </a>
+          <figcaption>
+            {% if photo.caption %}<strong>{{ photo.caption }}</strong>{% endif %}
+            <span class="muted">Uploaded {{ photo.uploaded_at }}{% if photo.uploaded_by %} by {{ photo.uploaded_by }}{% endif %}</span>
+            {% if photo.original_filename %}<span class="muted">{{ photo.original_filename }}</span>{% endif %}
+            {% if is_admin %}
+              <form method="post" action="{{ url_for('delete_sample_photo', photo_id=photo.id) }}" onsubmit="return confirm('Delete this sample photo?');">
+                <button class="link-button danger-link" type="submit">Delete photo</button>
+              </form>
+            {% endif %}
+          </figcaption>
+        </figure>
+      {% endfor %}
+    </div>
+  {% else %}
+    <p>No sample photos uploaded yet.</p>
   {% endif %}
 </section>
 

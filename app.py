@@ -31,12 +31,16 @@ import base64
 import csv
 import functools
 import hmac
+import hashlib
 import io
 import json
+import html
 import os
 import smtplib
 import sqlite3
 import urllib.request
+import secrets
+import re
 
 import requests
 from datetime import datetime, timedelta
@@ -44,13 +48,24 @@ from email.message import EmailMessage
 from pathlib import Path
 from typing import Any, Optional
 
-from flask import Flask, Response, flash, jsonify, redirect, render_template, request, send_file, session, url_for
+from flask import Flask, Response, flash, jsonify, has_request_context, make_response, redirect, render_template, request, send_file, session, url_for
+from werkzeug.security import check_password_hash, generate_password_hash
+from werkzeug.utils import secure_filename
 
 APP_DIR = Path(__file__).resolve().parent
 DB_FILE = APP_DIR / "sample_tracker_web.db"
 BACKUP_DIR = APP_DIR / "backups"
+SAMPLE_UPLOAD_DIR = APP_DIR / "sample_uploads"
 BACKUP_RETENTION_DAYS = int(os.environ.get("TRACEAPL_BACKUP_RETENTION_DAYS", "30"))
+ADMIN_USERNAME = os.environ.get("TRACEAPL_ADMIN_USERNAME", "admin").strip().lower() or "admin"
 ADMIN_PASSWORD = os.environ.get("TRACEAPL_ADMIN_PASSWORD", "change-me")
+TRACEAPL_REMEMBER_DAYS = int(os.environ.get("TRACEAPL_REMEMBER_DAYS", "14"))
+TRACEAPL_PASSWORD_MIN_LENGTH = int(os.environ.get("TRACEAPL_PASSWORD_MIN_LENGTH", "15"))
+TRACEAPL_SAMPLE_PHOTO_MAX_MB = int(os.environ.get("TRACEAPL_SAMPLE_PHOTO_MAX_MB", "10"))
+ALLOWED_SAMPLE_PHOTO_EXTENSIONS = {"jpg", "jpeg", "png", "gif", "webp"}
+ALLOWED_SAMPLE_PHOTO_CONTENT_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
+app_max_mb = int(os.environ.get("TRACEAPL_MAX_UPLOAD_MB", str(max(16, TRACEAPL_SAMPLE_PHOTO_MAX_MB + 4))))
+TRACEAPL_SYSTEM_AUDIT_RETENTION_DAYS = int(os.environ.get("TRACEAPL_SYSTEM_AUDIT_RETENTION_DAYS", "730"))
 TRACEAPL_BASE_URL = os.environ.get("TRACEAPL_BASE_URL", "")
 TRACEAPL_EMAIL_ENABLED = os.environ.get("TRACEAPL_EMAIL_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
 TRACEAPL_SMTP_HOST = os.environ.get("TRACEAPL_SMTP_HOST", "")
@@ -128,6 +143,30 @@ DENODO_LOCATION_LABEL_FIELDS = [
 ]
 DENODO_LOCATION_FILTER_PREFIX = os.environ.get("DENODO_LOCATION_FILTER_PREFIX", "").strip()
 
+# Daily Denodo work-authorization sync. The first production use case pulls
+# work orders tagged with CHAR HAND OFF and creates TraceAPL sample records.
+TRACEAPL_WORK_AUTH_SYNC_ENABLED = os.environ.get("TRACEAPL_WORK_AUTH_SYNC_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
+TRACEAPL_WORK_AUTH_SYNC_DRY_RUN = os.environ.get("TRACEAPL_WORK_AUTH_SYNC_DRY_RUN", "true").strip().lower() in {"1", "true", "yes", "on"}
+TRACEAPL_WORK_AUTH_SYNC_HOUR = int(os.environ.get("TRACEAPL_WORK_AUTH_SYNC_HOUR", "8"))
+TRACEAPL_WORK_AUTH_NOTIFY_EMAIL = os.environ.get("TRACEAPL_WORK_AUTH_NOTIFY_EMAIL", "avi.bregman@jhuapl.edu").strip()
+TRACEAPL_WORK_AUTH_DEFAULT_LOCATION = os.environ.get("TRACEAPL_WORK_AUTH_DEFAULT_LOCATION", "15-W114A").strip()
+DENODO_WORK_AUTH_OPS_REST_URL = os.environ.get(
+    "DENODO_WORK_AUTH_OPS_REST_URL",
+    "https://denodo.jhuapl.edu:9443/denodo-restfulws/APL_Engineering/views/ve_wo_ops",
+).strip()
+DENODO_WORK_AUTH_WO_REST_URL = os.environ.get(
+    "DENODO_WORK_AUTH_WO_REST_URL",
+    "https://denodo.jhuapl.edu:9443/denodo-restfulws/APL_Engineering/views/ve_wo",
+).strip()
+DENODO_WORK_AUTH_OPERATION_FIELD = os.environ.get("DENODO_WORK_AUTH_OPERATION_FIELD", "OPERATION_TYPE").strip()
+DENODO_WORK_AUTH_OPERATION_VALUE = os.environ.get("DENODO_WORK_AUTH_OPERATION_VALUE", "CHAR HAND OFF").strip()
+DENODO_WORK_AUTH_OPS_BASE_ID_FIELD = os.environ.get("DENODO_WORK_AUTH_OPS_BASE_ID_FIELD", "WORKORDER_BASE_ID").strip()
+DENODO_WORK_AUTH_WO_BASE_ID_FIELD = os.environ.get("DENODO_WORK_AUTH_WO_BASE_ID_FIELD", "BASE_ID").strip()
+DENODO_WORK_AUTH_WAREHOUSE_FIELD = os.environ.get("DENODO_WORK_AUTH_WAREHOUSE_FIELD", "WAREHOUSE_ID").strip()
+DENODO_WORK_AUTH_WBS_FIELD = os.environ.get("DENODO_WORK_AUTH_WBS_FIELD", "WBS_CODE").strip()
+DENODO_WORK_AUTH_PROJECT_SEPARATOR = os.environ.get("DENODO_WORK_AUTH_PROJECT_SEPARATOR", "")
+
+
 MOCK_EMPLOYEES = [
     {"display_name": "Test User", "email": "test.user@example.org", "employee_id": "000000", "user_id": "testuser", "team": "Mock Team"},
     {"display_name": "Sample Assignee", "email": "sample.assignee@example.org", "employee_id": "000001", "user_id": "samplea", "team": "Mock Team"},
@@ -136,28 +175,48 @@ MOCK_EMPLOYEES = [
 
 _last_backup_check_date: str | None = None
 _last_reminder_check_date: str | None = None
+_last_system_audit_cleanup_date: str | None = None
+_last_work_auth_sync_check_date: str | None = None
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("TRACEAPL_SECRET_KEY", "dev-change-this-secret-key")
+app.config["MAX_CONTENT_LENGTH"] = app_max_mb * 1024 * 1024
+
+
+def is_logged_in() -> bool:
+    return bool(session.get("traceapl_user_id") or session.get("traceapl_builtin_admin"))
+
+
+def current_username() -> str:
+    return str(session.get("traceapl_username") or "")
 
 
 def is_admin() -> bool:
-    return bool(session.get("traceapl_admin"))
+    return bool(session.get("traceapl_builtin_admin") or session.get("traceapl_role") == "admin" or session.get("traceapl_admin"))
 
 
 def admin_required(view_func):
     @functools.wraps(view_func)
     def wrapped(*args, **kwargs):
-        if not is_admin():
-            flash("Admin login required for that action.", "error")
+        if not is_logged_in():
+            flash("Admin login is required for that action.", "error")
             return redirect(url_for("admin_login", next=request.url))
+        if not is_admin():
+            with get_db() as conn:
+                log_system_audit_event(conn, "admin_access_denied", "failure", target_type="endpoint", target_id=request.endpoint or "", details={"path": request.path})
+            flash("Admin privileges are required for that action.", "error")
+            return redirect(url_for("home"))
         return view_func(*args, **kwargs)
     return wrapped
 
 
 @app.context_processor
-def inject_admin_state() -> dict[str, Any]:
-    return {"is_admin": is_admin()}
+def inject_user_state() -> dict[str, Any]:
+    return {
+        "is_logged_in": is_logged_in(),
+        "current_username": current_username(),
+        "is_admin": is_admin(),
+    }
 
 
 def now_iso() -> str:
@@ -177,7 +236,7 @@ def row_to_dict(row: sqlite3.Row | None) -> dict[str, Any]:
 
 
 def admin_actor() -> str:
-    return session.get("traceapl_admin_user") or "TraceAPL admin"
+    return current_username() or session.get("traceapl_admin_user") or "TraceAPL admin"
 
 
 def log_audit_event(
@@ -201,6 +260,229 @@ def log_audit_event(
         """,
         (entity_type, entity_id, action, actor or admin_actor(), now_iso(), details_text),
     )
+
+
+def get_client_ip() -> str:
+    """Return the best available client IP for audit records."""
+    forwarded_for = request.headers.get("X-Forwarded-For", "")
+    if forwarded_for:
+        return forwarded_for.split(",", 1)[0].strip()
+    return request.remote_addr or ""
+
+
+def log_system_audit_event(
+    conn: sqlite3.Connection,
+    event_type: str,
+    outcome: str = "success",
+    username: str | None = None,
+    role: str | None = None,
+    target_type: str = "",
+    target_id: str = "",
+    details: dict[str, Any] | str | None = None,
+) -> None:
+    """Create a security/system audit record. Admin-only retention is 2 years by default."""
+    if isinstance(details, str):
+        details_text = details
+    elif details is None:
+        details_text = ""
+    else:
+        details_text = json.dumps(details, default=str, sort_keys=True)
+    conn.execute(
+        """
+        INSERT INTO system_audit_log (
+            timestamp, username, role, event_type, outcome, target_type, target_id,
+            ip_address, user_agent, method, path, details
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            now_iso(),
+            username if username is not None else (current_username() if has_request_context() else "system"),
+            role if role is not None else (str(session.get("traceapl_role") or ("admin" if session.get("traceapl_builtin_admin") else "")) if has_request_context() else "system"),
+            event_type,
+            outcome,
+            target_type,
+            target_id,
+            get_client_ip() if has_request_context() else "",
+            request.headers.get("User-Agent", "") if has_request_context() else "",
+            request.method if has_request_context() else "SYSTEM",
+            request.path if has_request_context() else "",
+            details_text,
+        ),
+    )
+
+
+def cleanup_old_system_audit_events() -> None:
+    """Retain system audit records for TRACEAPL_SYSTEM_AUDIT_RETENTION_DAYS, default 730 days."""
+    if TRACEAPL_SYSTEM_AUDIT_RETENTION_DAYS <= 0:
+        return
+    cutoff = (datetime.now() - timedelta(days=TRACEAPL_SYSTEM_AUDIT_RETENTION_DAYS)).strftime("%Y-%m-%d %H:%M:%S")
+    with get_db() as conn:
+        conn.execute("DELETE FROM system_audit_log WHERE timestamp < ?", (cutoff,))
+
+
+
+USERNAME_RE = re.compile(r"^[A-Za-z0-9_.-]{3,64}$")
+
+
+def normalize_username(username: str) -> str:
+    return (username or "").strip().lower()
+
+
+def validate_username(username: str) -> str | None:
+    if not username:
+        return "Username is required."
+    if not USERNAME_RE.match(username):
+        return "Username must be 3-64 characters and may contain letters, numbers, dots, hyphens, and underscores."
+    if username == ADMIN_USERNAME:
+        return "That username is reserved. Choose a different username."
+    return None
+
+
+def validate_password(password: str, confirm_password: str | None = None, username: str | None = None) -> str | None:
+    """Validate TraceAPL account passwords.
+
+    Requirements:
+    - Minimum 15 characters.
+    - Must include at least 3 of 4 character types: lowercase, uppercase, number, special.
+    - Must not contain the TraceAPL/JHU/APL username. TraceAPL self-registration does
+      not collect first, middle, or last names; if those fields are added later, add
+      them to this check as additional prohibited tokens.
+    - Passwords do not expire by policy.
+    """
+    password = password or ""
+    if confirm_password is not None and password != confirm_password:
+        return "Passwords do not match."
+    if len(password) < TRACEAPL_PASSWORD_MIN_LENGTH:
+        return f"Password must be at least {TRACEAPL_PASSWORD_MIN_LENGTH} characters."
+
+    character_type_count = sum([
+        any(ch.islower() for ch in password),
+        any(ch.isupper() for ch in password),
+        any(ch.isdigit() for ch in password),
+        any(not ch.isalnum() for ch in password),
+    ])
+    if character_type_count < 3:
+        return "Password must include at least 3 of these 4 character types: lowercase letters, uppercase letters, numbers, and special characters."
+
+    normalized_password = password.lower()
+    normalized_username = normalize_username(username or "")
+    if normalized_username and len(normalized_username) >= 3 and normalized_username in normalized_password:
+        return "Password may not include your TraceAPL/JHU/APL username."
+    return None
+
+def fetch_user_by_username(conn: sqlite3.Connection, username: str) -> sqlite3.Row | None:
+    return conn.execute("SELECT * FROM users WHERE username = ?", (normalize_username(username),)).fetchone()
+
+
+def login_session_for_builtin_admin() -> None:
+    session.clear()
+    session["traceapl_builtin_admin"] = True
+    session["traceapl_user_id"] = "builtin-admin"
+    session["traceapl_username"] = ADMIN_USERNAME
+    session["traceapl_role"] = "admin"
+    session["traceapl_admin"] = True
+    session["traceapl_admin_user"] = ADMIN_USERNAME
+
+
+def login_session_for_user(user: sqlite3.Row) -> None:
+    session.clear()
+    session["traceapl_user_id"] = int(user["id"])
+    session["traceapl_username"] = user["username"]
+    session["traceapl_role"] = user["role"] or "user"
+    if session["traceapl_role"] == "admin":
+        session["traceapl_admin"] = True
+        session["traceapl_admin_user"] = user["username"]
+
+
+def clear_login_session() -> None:
+    session.pop("traceapl_builtin_admin", None)
+    session.pop("traceapl_user_id", None)
+    session.pop("traceapl_username", None)
+    session.pop("traceapl_role", None)
+    session.pop("traceapl_admin", None)
+    session.pop("traceapl_admin_user", None)
+
+
+def create_remember_token(conn: sqlite3.Connection, user_id: int, response: Response) -> None:
+    selector = secrets.token_urlsafe(18)
+    token = secrets.token_urlsafe(36)
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    expires_at = (datetime.now() + timedelta(days=TRACEAPL_REMEMBER_DAYS)).strftime("%Y-%m-%d %H:%M:%S")
+    conn.execute(
+        """
+        INSERT INTO remember_tokens (selector, user_id, token_hash, created_at, expires_at, last_used_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (selector, user_id, token_hash, now_iso(), expires_at, now_iso()),
+    )
+    response.set_cookie(
+        "traceapl_remember",
+        f"{selector}:{token}",
+        max_age=TRACEAPL_REMEMBER_DAYS * 24 * 60 * 60,
+        httponly=True,
+        secure=request.is_secure,
+        samesite="Lax",
+    )
+
+
+def clear_remember_cookie(response: Response) -> Response:
+    cookie_value = request.cookies.get("traceapl_remember", "")
+    if ":" in cookie_value:
+        selector = cookie_value.split(":", 1)[0]
+        with get_db() as conn:
+            conn.execute("DELETE FROM remember_tokens WHERE selector = ?", (selector,))
+    response.delete_cookie("traceapl_remember")
+    return response
+
+
+def try_restore_remembered_user() -> bool:
+    cookie_value = request.cookies.get("traceapl_remember", "")
+    if ":" not in cookie_value:
+        return False
+    selector, token = cookie_value.split(":", 1)
+    if not selector or not token:
+        return False
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    with get_db() as conn:
+        row = conn.execute(
+            """
+            SELECT rt.*, u.username, u.password_hash, u.role, u.is_active
+            FROM remember_tokens rt
+            JOIN users u ON u.id = rt.user_id
+            WHERE rt.selector = ?
+            """,
+            (selector,),
+        ).fetchone()
+        if not row:
+            return False
+        try:
+            expired = datetime.strptime(row["expires_at"], "%Y-%m-%d %H:%M:%S") < datetime.now()
+        except Exception:
+            expired = True
+        if expired or not row["is_active"] or not hmac.compare_digest(row["token_hash"], token_hash):
+            conn.execute("DELETE FROM remember_tokens WHERE selector = ?", (selector,))
+            return False
+        user = conn.execute("SELECT * FROM users WHERE id = ?", (row["user_id"],)).fetchone()
+        if not user:
+            return False
+        login_session_for_user(user)
+        conn.execute("UPDATE remember_tokens SET last_used_at = ? WHERE selector = ?", (now_iso(), selector))
+    return True
+
+
+def public_endpoint(endpoint: str | None) -> bool:
+    """Return True for endpoints that do not require admin authentication.
+
+    TraceAPL normal sample-tracking workflows are intentionally open to users who
+    can reach the application through the approved network/SSO boundary. The
+    built-in admin login is still required for admin-only endpoints by the
+    @admin_required decorator.
+    """
+    if not endpoint:
+        return True
+    if endpoint == "static":
+        return True
+    return not endpoint.startswith("admin_")
 
 
 
@@ -274,13 +556,22 @@ def backup_summary() -> dict[str, Any]:
 
 
 @app.before_request
-def run_daily_maintenance_check() -> None:
-    global _last_backup_check_date, _last_reminder_check_date
+def run_daily_maintenance_check() -> Response | None:
+    # Normal TraceAPL pages do not require user login. Admin-only routes remain
+    # protected by @admin_required.
+    global _last_backup_check_date, _last_reminder_check_date, _last_system_audit_cleanup_date, _last_work_auth_sync_check_date
     today = datetime.now().strftime("%Y-%m-%d")
 
     if _last_backup_check_date != today:
         ensure_daily_backup()
         _last_backup_check_date = today
+
+    if _last_system_audit_cleanup_date != today:
+        try:
+            cleanup_old_system_audit_events()
+        except Exception as exc:
+            print("TRACEAPL SYSTEM AUDIT CLEANUP ERROR:", repr(exc))
+        _last_system_audit_cleanup_date = today
 
     if _last_reminder_check_date != today:
         try:
@@ -290,8 +581,17 @@ def run_daily_maintenance_check() -> None:
             print("TRACEAPL REMINDER CHECK ERROR:", repr(exc))
         _last_reminder_check_date = today
 
+    work_auth_sync_check = globals().get("maybe_run_daily_work_auth_sync")
+    if callable(work_auth_sync_check):
+        try:
+            work_auth_sync_check()
+        except Exception as exc:
+            # Denodo sync should never make the web app unavailable.
+            print("TRACEAPL WORK AUTH SYNC CHECK ERROR:", repr(exc))
+
 
 def init_db() -> None:
+    SAMPLE_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     with get_db() as conn:
         conn.execute(
             """
@@ -376,6 +676,26 @@ def init_db() -> None:
         )
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS sample_photos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                qr_code_value TEXT NOT NULL,
+                stored_filename TEXT NOT NULL,
+                original_filename TEXT,
+                content_type TEXT,
+                size_bytes INTEGER,
+                caption TEXT,
+                uploaded_by TEXT,
+                uploaded_at TEXT NOT NULL,
+                FOREIGN KEY (qr_code_value) REFERENCES samples(qr_code_value)
+            )
+            """
+        )
+        sample_photo_columns = {row[1] for row in conn.execute("PRAGMA table_info(sample_photos)").fetchall()}
+        if "caption" not in sample_photo_columns:
+            conn.execute("ALTER TABLE sample_photos ADD COLUMN caption TEXT")
+
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS characterizations (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 qr_code_value TEXT NOT NULL,
@@ -411,6 +731,86 @@ def init_db() -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS system_audit_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                username TEXT,
+                role TEXT,
+                event_type TEXT NOT NULL,
+                outcome TEXT NOT NULL,
+                target_type TEXT,
+                target_id TEXT,
+                ip_address TEXT,
+                user_agent TEXT,
+                method TEXT,
+                path TEXT,
+                details TEXT
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_system_audit_log_timestamp ON system_audit_log(timestamp)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_system_audit_log_event_type ON system_audit_log(event_type)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_system_audit_log_username ON system_audit_log(username)")
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS work_auth_sync_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                started_at TEXT NOT NULL,
+                triggered_by TEXT,
+                dry_run INTEGER NOT NULL DEFAULT 1,
+                scanned INTEGER NOT NULL DEFAULT 0,
+                created INTEGER NOT NULL DEFAULT 0,
+                skipped_existing INTEGER NOT NULL DEFAULT 0,
+                skipped_missing_project INTEGER NOT NULL DEFAULT 0,
+                errors TEXT,
+                created_samples TEXT,
+                summary_json TEXT
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_work_auth_sync_runs_started_at ON work_auth_sync_runs(started_at)")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                role TEXT NOT NULL DEFAULT 'user',
+                is_active INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                last_login_at TEXT,
+                last_password_change_at TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS remember_tokens (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                selector TEXT NOT NULL UNIQUE,
+                user_id INTEGER NOT NULL,
+                token_hash TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                last_used_at TEXT,
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_remember_tokens_user_id ON remember_tokens(user_id)")
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS app_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
 
 
 def normalize_code_value(code_value: str) -> str:
@@ -437,14 +837,102 @@ def log_scan(qr_code_value: str, scan_type: str, result: str, scanned_by: str = 
             (normalize_code_value(qr_code_value), scan_type, scanned_by.strip(), now_iso(), result, notes.strip()),
         )
 
-def manual_tracking_key(sample_id: str) -> str:
-    """Create an internal lookup key for samples entered without a QR label."""
-    cleaned = sample_id.strip()
-    return f"MANUAL::{cleaned}"
+def manual_tracking_key(sample_id: str, work_program: str = "") -> str:
+    """Create an internal lookup key for samples entered without a QR label.
+
+    Manual entries do not have a preprinted QR/barcode value to guarantee uniqueness.
+    Earlier versions used only the Sample ID, which made Sample IDs globally unique.
+    The key now includes a deterministic hash of Sample ID + Work Program so the
+    same Sample ID can be used in different work programs while remaining unique
+    inside one work program.
+    """
+    cleaned_sample = sample_id.strip()
+    cleaned_work_program = work_program.strip() or "UNASSIGNED"
+    digest = hashlib.sha256(f"{cleaned_work_program.lower()}::{cleaned_sample.lower()}".encode("utf-8")).hexdigest()[:16]
+    return f"MANUAL::{digest}::{cleaned_sample}"
 
 
 def is_manual_tracking_key(qr_code_value: str) -> bool:
     return qr_code_value.startswith("MANUAL::")
+
+
+def generated_tracking_key() -> str:
+    """Create a TraceAPL-generated tracking value for samples created before a physical label exists."""
+    return f"TRACEAPL-GENERATED::{secrets.token_urlsafe(18)}"
+
+
+def generate_unique_tracking_key(conn: sqlite3.Connection) -> str:
+    for _ in range(20):
+        candidate = generated_tracking_key()
+        if not conn.execute("SELECT 1 FROM samples WHERE qr_code_value = ?", (candidate,)).fetchone():
+            return candidate
+    raise RuntimeError("Unable to generate a unique TraceAPL tracking code.")
+
+
+def is_generated_tracking_key(qr_code_value: str) -> bool:
+    return qr_code_value.startswith("TRACEAPL-GENERATED::")
+
+
+def allowed_sample_photo(filename: str, content_type: str) -> bool:
+    extension = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    return extension in ALLOWED_SAMPLE_PHOTO_EXTENSIONS and content_type in ALLOWED_SAMPLE_PHOTO_CONTENT_TYPES
+
+
+def save_sample_photo(conn: sqlite3.Connection, qr_code_value: str, file_storage, caption: str = "") -> int | None:
+    """Save an optional sample photo and create a DB record. Returns the photo id, or None."""
+    if not file_storage or not getattr(file_storage, "filename", ""):
+        return None
+
+    original_filename = secure_filename(file_storage.filename or "")
+    content_type = file_storage.mimetype or "application/octet-stream"
+    if not original_filename:
+        raise ValueError("Photo filename is empty.")
+    if not allowed_sample_photo(original_filename, content_type):
+        raise ValueError("Photo must be a JPG, PNG, GIF, or WEBP image.")
+
+    # Read once so size limits are enforced before anything is written to disk.
+    data = file_storage.read()
+    max_bytes = TRACEAPL_SAMPLE_PHOTO_MAX_MB * 1024 * 1024
+    if len(data) > max_bytes:
+        raise ValueError(f"Photo must be {TRACEAPL_SAMPLE_PHOTO_MAX_MB} MB or smaller.")
+
+    extension = original_filename.rsplit(".", 1)[-1].lower()
+    stored_filename = f"sample-photo-{secrets.token_urlsafe(18)}.{extension}"
+    SAMPLE_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    (SAMPLE_UPLOAD_DIR / stored_filename).write_bytes(data)
+
+    cursor = conn.execute(
+        """
+        INSERT INTO sample_photos (
+            qr_code_value, stored_filename, original_filename, content_type,
+            size_bytes, caption, uploaded_by, uploaded_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (qr_code_value, stored_filename, original_filename, content_type, len(data), caption.strip(), current_username(), now_iso()),
+    )
+    log_audit_event(conn, "sample", qr_code_value, "sample_photo_uploaded", {"photo_id": cursor.lastrowid, "original_filename": original_filename})
+    log_system_audit_event(conn, "sample_photo_uploaded", "success", target_type="sample", target_id=qr_code_value, details={"photo_id": cursor.lastrowid})
+    return int(cursor.lastrowid)
+
+
+def sample_id_exists_in_work_program(sample_id: str, work_program: str, exclude_qr_code_value: str = "") -> bool:
+    """Return True when an active sample already uses this Sample ID in this Work Program."""
+    normalized_sample_id = sample_id.strip()
+    normalized_work_program = work_program.strip()
+    sql = """
+        SELECT 1
+        FROM samples
+        WHERE deleted_at IS NULL
+          AND lower(TRIM(sample_id)) = lower(TRIM(?))
+          AND lower(TRIM(COALESCE(work_program, ''))) = lower(TRIM(?))
+    """
+    params: list[str] = [normalized_sample_id, normalized_work_program]
+    if exclude_qr_code_value:
+        sql += " AND qr_code_value != ?"
+        params.append(exclude_qr_code_value)
+    sql += " LIMIT 1"
+    with get_db() as conn:
+        return conn.execute(sql, params).fetchone() is not None
 
 
 def sample_url(qr_code_value: str) -> str:
@@ -1012,10 +1500,344 @@ def api_employee_search() -> Response:
         return jsonify({"error": "Employee lookup temporarily unavailable."}), 503
 
 
+
+
+def _denodo_rest_get(rest_url: str, params: dict[str, str] | None = None) -> Any:
+    """Fetch a Denodo REST endpoint and return JSON data or response text.
+
+    Some Denodo REST pages return HTML with a JavaScript ``var data = [...]`` block
+    unless JSON is explicitly supported. The work-authorization sync handles both.
+    """
+    if not DENODO_USERNAME or not DENODO_PASSWORD:
+        raise RuntimeError("DENODO_USERNAME and DENODO_PASSWORD must be configured for Denodo REST lookup.")
+    response = requests.get(
+        rest_url,
+        params=params or {},
+        auth=(DENODO_USERNAME, DENODO_PASSWORD),
+        timeout=DENODO_TIMEOUT_SECONDS,
+        verify=DENODO_VERIFY_SSL,
+    )
+    response.raise_for_status()
+    content_type = response.headers.get("Content-Type", "").lower()
+    if "json" in content_type:
+        return response.json()
+    text = response.text
+    stripped = text.lstrip()
+    if stripped.startswith("{") or stripped.startswith("["):
+        try:
+            return response.json()
+        except Exception:
+            return text
+    return text
+
+
+def _extract_denodo_rows(payload: Any) -> list[dict[str, Any]]:
+    """Extract rows from Denodo JSON or Denodo's HTML table page."""
+    if isinstance(payload, list):
+        return [row for row in payload if isinstance(row, dict)]
+    if isinstance(payload, dict):
+        for key in ("elements", "data", "rows", "result", "results"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                return [row for row in value if isinstance(row, dict)]
+        # Some Denodo responses wrap rows one level deeper.
+        for value in payload.values():
+            if isinstance(value, dict):
+                nested = _extract_denodo_rows(value)
+                if nested:
+                    return nested
+        return []
+    if not isinstance(payload, str):
+        return []
+
+    # Denodo browser pages embed the returned records as JavaScript:
+    #   var data = [{...}, {...}];
+    match = re.search(r"var\s+data\s*=\s*(\[.*?\])\s*;", payload, flags=re.DOTALL)
+    if not match:
+        return []
+    raw = html.unescape(match.group(1))
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        # Keep this explicit so the admin sync page records a useful error.
+        raise RuntimeError("Unable to parse Denodo HTML response: embedded var data block was not valid JSON.")
+    return [row for row in data if isinstance(row, dict)]
+
+
+def _fetch_denodo_view_rows(rest_url: str, params: dict[str, str] | None = None) -> list[dict[str, Any]]:
+    payload = _denodo_rest_get(rest_url, params=params)
+    return _extract_denodo_rows(payload)
+
+
+def _first_nonempty(row: dict[str, Any], field_names: list[str]) -> str:
+    for name in field_names:
+        value = row.get(name)
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return ""
+
+
+def _work_auth_project_id(warehouse_id: str, wbs_code: str) -> str:
+    warehouse_id = (warehouse_id or "").strip()
+    wbs_code = (wbs_code or "").strip()
+    if warehouse_id and wbs_code:
+        return f"{warehouse_id}{DENODO_WORK_AUTH_PROJECT_SEPARATOR}{wbs_code}"
+    return warehouse_id or wbs_code
+
+
+def fetch_char_handoff_denodo_records() -> list[dict[str, str]]:
+    """Return CHAR HAND OFF work orders with project/work-program data from Denodo."""
+    ops_rows = _fetch_denodo_view_rows(
+        DENODO_WORK_AUTH_OPS_REST_URL,
+        params={DENODO_WORK_AUTH_OPERATION_FIELD: DENODO_WORK_AUTH_OPERATION_VALUE},
+    )
+    seen_base_ids: set[str] = set()
+    records: list[dict[str, str]] = []
+    for row in ops_rows:
+        base_id = _first_nonempty(row, [DENODO_WORK_AUTH_OPS_BASE_ID_FIELD, "WORKORDER_BASE_ID", "BASE_ID"])
+        if not base_id or base_id in seen_base_ids:
+            continue
+        seen_base_ids.add(base_id)
+        records.append({"base_id": base_id, "operation_type": str(row.get(DENODO_WORK_AUTH_OPERATION_FIELD, DENODO_WORK_AUTH_OPERATION_VALUE) or "")})
+
+    for record in records:
+        base_id = record["base_id"]
+        wo_rows: list[dict[str, Any]] = []
+        # Try the base-id field configured for ve_wo, then common fallbacks.
+        for field in [DENODO_WORK_AUTH_WO_BASE_ID_FIELD, "BASE_ID", "WORKORDER_BASE_ID", "WONUM"]:
+            if not field:
+                continue
+            try:
+                wo_rows = _fetch_denodo_view_rows(DENODO_WORK_AUTH_WO_REST_URL, params={field: base_id})
+            except requests.HTTPError:
+                wo_rows = []
+            if wo_rows:
+                break
+        if not wo_rows:
+            record.update({"warehouse_id": "", "wbs_code": "", "work_program": ""})
+            continue
+        wo = wo_rows[0]
+        warehouse_id = _first_nonempty(wo, [DENODO_WORK_AUTH_WAREHOUSE_FIELD, "WAREHOUSE_ID"])
+        wbs_code = _first_nonempty(wo, [DENODO_WORK_AUTH_WBS_FIELD, "WBS_CODE"])
+        record.update({
+            "warehouse_id": warehouse_id,
+            "wbs_code": wbs_code,
+            "work_program": _work_auth_project_id(warehouse_id, wbs_code),
+        })
+    return records
+
+
+def _work_auth_duplicate_exists(conn: sqlite3.Connection, work_program: str, base_id: str) -> bool:
+    return conn.execute(
+        """
+        SELECT 1 FROM samples
+        WHERE COALESCE(deleted_at, '') = ''
+          AND TRIM(COALESCE(work_program, '')) = ?
+          AND TRIM(COALESCE(batch_lot, '')) = ?
+        LIMIT 1
+        """,
+        (work_program.strip(), base_id.strip()),
+    ).fetchone() is not None
+
+
+def send_work_auth_sample_notification(sample_info: dict[str, str]) -> None:
+    if not TRACEAPL_WORK_AUTH_NOTIFY_EMAIL:
+        return
+    subject = f"TraceAPL CHAR HAND OFF sample added: {sample_info.get('sample_id', '')}"
+    body = (
+        "TraceAPL created a sample from the Denodo CHAR HAND OFF sync.\n\n"
+        f"Sample ID: {sample_info.get('sample_id', '')}\n"
+        f"Batch/Lot: {sample_info.get('batch_lot', '')}\n"
+        f"Work Program: {sample_info.get('work_program', '')}\n"
+        f"Location: {sample_info.get('current_location', '')}\n"
+        f"Tracking value: {sample_info.get('qr_code_value', '')}\n"
+    )
+    send_plain_email(TRACEAPL_WORK_AUTH_NOTIFY_EMAIL, subject, body)
+
+
+def _record_work_auth_sync_run(summary: dict[str, Any]) -> None:
+    with get_db() as conn:
+        conn.execute(
+            """
+            INSERT INTO work_auth_sync_runs (
+                started_at, triggered_by, dry_run, scanned, created, skipped_existing,
+                skipped_missing_project, errors, created_samples, summary_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                summary.get("started_at", now_iso()),
+                summary.get("triggered_by", ""),
+                1 if summary.get("dry_run") else 0,
+                int(summary.get("scanned", 0)),
+                int(summary.get("created", 0)),
+                int(summary.get("skipped_existing", 0)),
+                int(summary.get("skipped_missing_project", 0)),
+                json.dumps(summary.get("errors", []), default=str),
+                json.dumps(summary.get("created_samples", []), default=str),
+                json.dumps(summary, default=str, sort_keys=True),
+            ),
+        )
+        log_system_audit_event(
+            conn,
+            "work_auth_sync_completed" if not summary.get("errors") else "work_auth_sync_error",
+            "failure" if summary.get("errors") else "success",
+            target_type="denodo_sync",
+            target_id="CHAR HAND OFF",
+            details=summary,
+        )
+
+
+def get_work_auth_sync_last_run() -> dict[str, Any] | None:
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM work_auth_sync_runs ORDER BY started_at DESC, id DESC LIMIT 1").fetchone()
+    if not row:
+        return None
+    result = dict(row)
+    result["dry_run"] = bool(result.get("dry_run"))
+    for key in ("errors", "created_samples"):
+        try:
+            result[key] = json.loads(result.get(key) or "[]")
+        except Exception:
+            result[key] = []
+    return result
+
+
+def run_work_auth_sync(dry_run: bool | None = None, triggered_by: str = "manual") -> dict[str, Any]:
+    """Run the Denodo CHAR HAND OFF sync once.
+
+    Dry run scans and reports what would be created, but does not write samples
+    and does not send notification emails.
+    """
+    if dry_run is None:
+        dry_run = TRACEAPL_WORK_AUTH_SYNC_DRY_RUN
+    summary: dict[str, Any] = {
+        "started_at": now_iso(),
+        "triggered_by": triggered_by,
+        "dry_run": bool(dry_run),
+        "scanned": 0,
+        "created": 0,
+        "skipped_existing": 0,
+        "skipped_missing_project": 0,
+        "created_samples": [],
+        "errors": [],
+    }
+    try:
+        records = fetch_char_handoff_denodo_records()
+        summary["scanned"] = len(records)
+        with get_db() as conn:
+            log_system_audit_event(conn, "work_auth_sync_started", "success", target_type="denodo_sync", target_id="CHAR HAND OFF", details={"dry_run": dry_run, "record_count": len(records)})
+            for record in records:
+                base_id = record.get("base_id", "").strip()
+                work_program = record.get("work_program", "").strip()
+                if not base_id or not work_program:
+                    summary["skipped_missing_project"] += 1
+                    continue
+                if _work_auth_duplicate_exists(conn, work_program, base_id):
+                    summary["skipped_existing"] += 1
+                    continue
+                qr_code_value = generate_unique_tracking_key(conn)
+                sample_info = {
+                    "qr_code_value": qr_code_value,
+                    "sample_id": base_id,
+                    "batch_lot": base_id,
+                    "sample_type": DENODO_WORK_AUTH_OPERATION_VALUE,
+                    "work_program": work_program,
+                    "current_location": TRACEAPL_WORK_AUTH_DEFAULT_LOCATION,
+                    "status": "Produced",
+                }
+                summary["created_samples"].append(sample_info)
+                if dry_run:
+                    continue
+                conn.execute(
+                    """
+                    INSERT INTO samples (
+                        qr_code_value, sample_id, sample_type, batch_lot, created_by,
+                        created_at, current_owner, current_location, status, work_program, project, task, notes
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        qr_code_value,
+                        base_id,
+                        DENODO_WORK_AUTH_OPERATION_VALUE,
+                        base_id,
+                        "Denodo CHAR HAND OFF sync",
+                        now_iso(),
+                        "",
+                        TRACEAPL_WORK_AUTH_DEFAULT_LOCATION,
+                        "Produced",
+                        work_program,
+                        work_program,
+                        "",
+                        f"Created automatically from Denodo {DENODO_WORK_AUTH_OPERATION_VALUE}. Warehouse={record.get('warehouse_id', '')}; WBS={record.get('wbs_code', '')}",
+                    ),
+                )
+                log_audit_event(conn, "sample", qr_code_value, "created_from_denodo_char_handoff", sample_info, actor="system")
+                log_system_audit_event(conn, "work_auth_sample_created", "success", target_type="sample", target_id=qr_code_value, details=sample_info)
+                summary["created"] += 1
+        if not dry_run and summary["created_samples"]:
+            for sample_info in summary["created_samples"]:
+                try:
+                    send_work_auth_sample_notification(sample_info)
+                except Exception as exc:
+                    summary["errors"].append(f"Email notification failed for {sample_info.get('sample_id', '')}: {exc}")
+    except Exception as exc:
+        summary["errors"].append(str(exc))
+    _record_work_auth_sync_run(summary)
+    return summary
+
+
+def maybe_run_daily_work_auth_sync() -> None:
+    """Run the work-auth sync once per day after the configured hour."""
+    global _last_work_auth_sync_check_date
+    if not TRACEAPL_WORK_AUTH_SYNC_ENABLED:
+        return
+    now = datetime.now()
+    today = now.strftime("%Y-%m-%d")
+    if _last_work_auth_sync_check_date == today:
+        return
+    if now.hour < TRACEAPL_WORK_AUTH_SYNC_HOUR:
+        return
+    run_work_auth_sync(dry_run=TRACEAPL_WORK_AUTH_SYNC_DRY_RUN, triggered_by="daily_app_check")
+    _last_work_auth_sync_check_date = today
+
+
 @app.route("/admin")
 @admin_required
 def admin_dashboard() -> str:
     return render_template("admin.html", backup_info=backup_summary())
+
+
+
+
+@app.route("/admin/work-auth-sync")
+@admin_required
+def admin_work_auth_sync() -> str:
+    return render_template(
+        "work_auth_sync.html",
+        last_run=get_work_auth_sync_last_run(),
+        sync_enabled=TRACEAPL_WORK_AUTH_SYNC_ENABLED,
+        dry_run=TRACEAPL_WORK_AUTH_SYNC_DRY_RUN,
+        sync_hour=TRACEAPL_WORK_AUTH_SYNC_HOUR,
+        notify_email=TRACEAPL_WORK_AUTH_NOTIFY_EMAIL,
+        default_location=TRACEAPL_WORK_AUTH_DEFAULT_LOCATION,
+        ops_url=DENODO_WORK_AUTH_OPS_REST_URL,
+        wo_url=DENODO_WORK_AUTH_WO_REST_URL,
+        operation_value=DENODO_WORK_AUTH_OPERATION_VALUE,
+    )
+
+
+@app.route("/admin/work-auth-sync/run", methods=["POST"])
+@admin_required
+def admin_run_work_auth_sync() -> Response:
+    dry_run = request.form.get("dry_run", "") == "1"
+    summary = run_work_auth_sync(dry_run=dry_run, triggered_by="admin_manual")
+    if summary.get("errors"):
+        flash(f"CHAR HAND OFF sync completed with errors: {'; '.join(summary['errors'])}", "error")
+    elif dry_run:
+        flash(f"Dry run complete. {summary['scanned']} Denodo record(s) scanned; {len(summary['created_samples'])} sample(s) would be created; {summary['skipped_existing']} duplicate(s) skipped.", "success")
+    else:
+        flash(f"Sync complete. {summary['created']} sample(s) created; {summary['skipped_existing']} duplicate(s) skipped.", "success")
+    return redirect(url_for("admin_work_auth_sync"))
 
 
 @app.route("/admin/reminders/run", methods=["POST"])
@@ -1030,26 +1852,127 @@ def run_reminders_now() -> Response:
     return redirect(request.referrer or url_for("admin_dashboard"))
 
 
-@app.route("/admin/login", methods=["GET", "POST"])
-def admin_login() -> str | Response:
+@app.route("/login", methods=["GET", "POST"])
+def login() -> str | Response:
+    """Built-in admin login only. Normal TraceAPL workflows are public."""
     next_url = request.values.get("next") or url_for("admin_dashboard")
     if request.method == "POST":
+        username = normalize_username(request.form.get("username", ""))
         password = request.form.get("password", "")
+
+        if username != ADMIN_USERNAME:
+            with get_db() as conn:
+                log_system_audit_event(conn, "admin_login_failed", "failure", username=username or "unknown", role="admin", target_type="user", target_id=username or "unknown", details={"reason": "not_builtin_admin"})
+            flash("Use the built-in admin account for administrator access.", "error")
+            return render_template("login.html", next_url=next_url, admin_only=True)
+
+        admin_password_error = validate_password(ADMIN_PASSWORD, username=ADMIN_USERNAME)
+        if admin_password_error:
+            with get_db() as conn:
+                log_system_audit_event(conn, "admin_login_blocked", "failure", username=ADMIN_USERNAME, role="admin", target_type="user", target_id=ADMIN_USERNAME, details={"reason": "admin_password_policy_not_met"})
+            flash("Built-in admin password does not meet TraceAPL password policy. Set TRACEAPL_ADMIN_PASSWORD to a compliant value on the server.", "error")
+            return render_template("login.html", next_url=next_url, admin_only=True)
+
         if hmac.compare_digest(password, ADMIN_PASSWORD):
-            session["traceapl_admin"] = True
-            session["traceapl_admin_user"] = request.form.get("admin_user", "").strip() or "TraceAPL admin"
-            flash("Admin login successful.", "success")
+            login_session_for_builtin_admin()
+            with get_db() as conn:
+                log_audit_event(conn, "auth", ADMIN_USERNAME, "admin_login", {"remember_device": False}, actor=ADMIN_USERNAME)
+                log_system_audit_event(conn, "admin_login", "success", username=ADMIN_USERNAME, role="admin", target_type="user", target_id=ADMIN_USERNAME, details={"remember_device": False})
+            flash("Logged in as admin.", "success")
             return redirect(next_url)
+
+        with get_db() as conn:
+            log_system_audit_event(conn, "admin_login_failed", "failure", username=ADMIN_USERNAME, role="admin", target_type="user", target_id=ADMIN_USERNAME, details={"reason": "bad_credentials"})
         flash("Incorrect admin password.", "error")
-    return render_template("admin_login.html", next_url=next_url)
+
+    return render_template("login.html", next_url=next_url, admin_only=True)
+
+
+@app.route("/register", methods=["GET", "POST"])
+def register() -> Response:
+    flash("TraceAPL user self-registration is disabled. Normal TraceAPL workflows do not require a user account.", "info")
+    return redirect(url_for("home"))
+
+
+@app.route("/logout", methods=["POST"])
+def logout() -> Response:
+    username = current_username() or "admin"
+    with get_db() as conn:
+        log_audit_event(conn, "auth", username, "admin_logout", {"username": username}, actor=username)
+        log_system_audit_event(conn, "admin_logout", "success", username=username, role="admin", target_type="user", target_id=username)
+    clear_login_session()
+    response = make_response(redirect(url_for("home")))
+    clear_remember_cookie(response)
+    flash("Logged out.", "success")
+    return response
+
+
+@app.route("/admin/login", methods=["GET", "POST"])
+def admin_login() -> str | Response:
+    return redirect(url_for("login", next=request.values.get("next") or url_for("admin_dashboard")))
 
 
 @app.route("/admin/logout", methods=["POST"])
 def admin_logout() -> Response:
-    session.pop("traceapl_admin", None)
-    session.pop("traceapl_admin_user", None)
-    flash("Admin logged out.", "success")
+    return logout()
+
+
+@app.route("/account/password", methods=["GET", "POST"])
+def change_password() -> Response:
+    flash("User password changes are disabled because normal TraceAPL access no longer uses user accounts. The built-in admin password is controlled by TRACEAPL_ADMIN_PASSWORD on the server.", "info")
     return redirect(url_for("home"))
+
+
+@app.route("/admin/users")
+@admin_required
+def admin_users() -> str:
+    with get_db() as conn:
+        users = conn.execute("SELECT * FROM users ORDER BY created_at DESC, username ASC").fetchall()
+    return render_template("admin_users.html", users=users, admin_username=ADMIN_USERNAME)
+
+
+@app.route("/admin/users/<int:user_id>/reset-password", methods=["POST"])
+@admin_required
+def admin_reset_user_password(user_id: int) -> Response:
+    new_password = request.form.get("new_password", "")
+    confirm_password = request.form.get("confirm_password", "")
+    with get_db() as conn:
+        user = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        if not user:
+            flash("User account not found.", "error")
+            return redirect(url_for("admin_users"))
+        password_error = validate_password(new_password, confirm_password, user["username"])
+        if password_error:
+            flash(password_error, "error")
+            return redirect(url_for("admin_users"))
+        conn.execute(
+            "UPDATE users SET password_hash = ?, last_password_change_at = ? WHERE id = ?",
+            (generate_password_hash(new_password), now_iso(), user_id),
+        )
+        conn.execute("DELETE FROM remember_tokens WHERE user_id = ?", (user_id,))
+        log_audit_event(conn, "user", str(user_id), "admin_reset_password", {"username": user["username"]})
+        log_system_audit_event(conn, "admin_reset_password", "success", target_type="user", target_id=str(user_id), details={"username": user["username"]})
+    flash(f"Password reset for {user['username']}.", "success")
+    return redirect(url_for("admin_users"))
+
+
+@app.route("/admin/users/<int:user_id>/toggle-active", methods=["POST"])
+@admin_required
+def admin_toggle_user_active(user_id: int) -> Response:
+    with get_db() as conn:
+        user = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        if not user:
+            flash("User account not found.", "error")
+            return redirect(url_for("admin_users"))
+        new_active = 0 if user["is_active"] else 1
+        conn.execute("UPDATE users SET is_active = ? WHERE id = ?", (new_active, user_id))
+        if not new_active:
+            conn.execute("DELETE FROM remember_tokens WHERE user_id = ?", (user_id,))
+        action = "user_enabled" if new_active else "user_disabled"
+        log_audit_event(conn, "user", str(user_id), action, {"username": user["username"]})
+        log_system_audit_event(conn, action, "success", target_type="user", target_id=str(user_id), details={"username": user["username"]})
+    flash(f"User {user['username']} {'enabled' if new_active else 'disabled'}.", "success")
+    return redirect(url_for("admin_users"))
 
 
 @app.route("/")
@@ -1106,6 +2029,11 @@ def home() -> str:
 @app.route("/sample/manual/new")
 def manual_sample() -> str:
     return render_template("new_sample.html", qr_code_value="", manual_entry=True)
+
+
+@app.route("/sample/generated/new")
+def generated_sample() -> str:
+    return render_template("new_sample.html", qr_code_value=generated_tracking_key(), manual_entry=False, generated_entry=True)
 
 
 @app.route("/work-program/<path:work_program_name>")
@@ -1219,7 +2147,7 @@ def new_sample() -> str:
     if existing:
         flash("That code is already assigned.", "error")
         return redirect(url_for("sample_detail", qr_code_value=qr_code_value))
-    return render_template("new_sample.html", qr_code_value=qr_code_value, manual_entry=False)
+    return render_template("new_sample.html", qr_code_value=qr_code_value, manual_entry=False, generated_entry=False)
 
 
 @app.route("/sample/create", methods=["POST"])
@@ -1227,24 +2155,29 @@ def create_sample() -> Response:
     entry_mode = request.form.get("entry_mode", "qr").strip()
     qr_code_value = normalize_code_value(request.form.get("qr_code_value", ""))
     sample_id = request.form.get("sample_id", "").strip()
+    work_program = request.form.get("work_program", request.form.get("project", "")).strip()
 
     if not sample_id:
         flash("Sample ID is required.", "error")
         return redirect(url_for("manual_sample") if entry_mode == "manual" else url_for("new_sample", qr_code_value=qr_code_value))
 
+    if sample_id_exists_in_work_program(sample_id, work_program):
+        flash("That Sample ID already exists in this Work Program. Use a unique Sample ID within the Work Program, or choose a different Work Program.", "error")
+        return redirect(url_for("manual_sample") if entry_mode == "manual" else url_for("new_sample", qr_code_value=qr_code_value))
+
     if entry_mode == "manual":
-        qr_code_value = manual_tracking_key(sample_id)
-        with get_db() as conn:
-            existing_sample_id = conn.execute("SELECT 1 FROM samples WHERE sample_id = ?", (sample_id,)).fetchone()
-        if existing_sample_id:
-            flash("That Sample ID already exists. Choose a unique Sample ID for manual entry.", "error")
-            return redirect(url_for("manual_sample"))
+        qr_code_value = manual_tracking_key(sample_id, work_program)
+    elif entry_mode == "generated":
+        # If the form already has a generated value, use it; otherwise create one at submit time.
+        qr_code_value = qr_code_value or generated_tracking_key()
     elif not qr_code_value:
         flash("A QR code or barcode is required for code-based sample creation.", "error")
         return redirect(url_for("new_sample", qr_code_value=qr_code_value))
 
     try:
         with get_db() as conn:
+            if entry_mode == "generated" and conn.execute("SELECT 1 FROM samples WHERE qr_code_value = ?", (qr_code_value,)).fetchone():
+                qr_code_value = generate_unique_tracking_key(conn)
             conn.execute(
                 """
                 INSERT INTO samples (
@@ -1262,8 +2195,8 @@ def create_sample() -> Response:
                     request.form.get("current_owner", "").strip(),
                     request.form.get("current_location", "").strip(),
                     request.form.get("status", "Produced").strip() or "Produced",
-                    request.form.get("work_program", request.form.get("project", "")).strip(),
-                    request.form.get("work_program", request.form.get("project", "")).strip(),
+                    work_program,
+                    work_program,
                     "",
                     request.form.get("notes", "").strip(),
                 ),
@@ -1285,14 +2218,23 @@ def create_sample() -> Response:
                     )
                     if assigned_to:
                         notification_queue.append((assigned_to, value, ""))
+            try:
+                save_sample_photo(conn, qr_code_value, request.files.get("sample_photo"), request.form.get("sample_photo_caption", ""))
+            except ValueError as exc:
+                flash(str(exc), "error")
+                raise
         log_scan(qr_code_value, "assign", "sample_created", request.form.get("created_by", ""))
         if entry_mode == "manual":
             flash("Manual sample record created.", "success")
+        elif entry_mode == "generated":
+            flash("Sample created with a TraceAPL-generated QR value. You can print the custom QR code from the sample page.", "success")
         else:
             flash("Sample created and code assigned.", "success")
         for assigned_to, value, notes in notification_queue:
             notify_assignment_flash(assigned_to, sample_id, qr_code_value, value, notes)
         return redirect(url_for("sample_detail", qr_code_value=qr_code_value))
+    except ValueError:
+        return redirect(url_for("manual_sample") if entry_mode == "manual" else (url_for("generated_sample") if entry_mode == "generated" else url_for("new_sample", qr_code_value=qr_code_value)))
     except sqlite3.IntegrityError:
         if entry_mode == "manual":
             flash("That manual Sample ID already exists.", "error")
@@ -1321,14 +2263,74 @@ def sample_detail(qr_code_value: str) -> str | Response:
             "SELECT * FROM characterizations WHERE qr_code_value = ? ORDER BY completed_at IS NOT NULL, created_at ASC, id ASC",
             (qr_code_value,),
         ).fetchall()
+        photos = conn.execute(
+            "SELECT * FROM sample_photos WHERE qr_code_value = ? ORDER BY uploaded_at DESC, id DESC",
+            (qr_code_value,),
+        ).fetchall()
     return render_template(
         "sample_detail.html",
         sample=sample,
         handoffs=handoffs,
         scans=scans,
         characterizations=characterizations,
+        photos=photos,
         is_manual_sample=is_manual_tracking_key(qr_code_value),
+        is_generated_sample=is_generated_tracking_key(qr_code_value),
     )
+
+
+@app.route("/sample/<path:qr_code_value>/photo/upload", methods=["POST"])
+def upload_sample_photo(qr_code_value: str) -> Response:
+    sample = fetch_sample(qr_code_value)
+    if not sample:
+        flash("Sample entry was not found.", "error")
+        return redirect(url_for("search"))
+    try:
+        with get_db() as conn:
+            photo_id = save_sample_photo(conn, qr_code_value, request.files.get("sample_photo"), request.form.get("sample_photo_caption", ""))
+            if photo_id:
+                flash("Sample photo uploaded.", "success")
+            else:
+                flash("Choose a photo before uploading.", "error")
+    except ValueError as exc:
+        flash(str(exc), "error")
+    return redirect(url_for("sample_detail", qr_code_value=qr_code_value))
+
+
+@app.route("/sample-photo/<int:photo_id>")
+def sample_photo_file(photo_id: int) -> Response:
+    with get_db() as conn:
+        photo = conn.execute("SELECT * FROM sample_photos WHERE id = ?", (photo_id,)).fetchone()
+    if not photo:
+        flash("Sample photo was not found.", "error")
+        return redirect(url_for("search"))
+    path = SAMPLE_UPLOAD_DIR / photo["stored_filename"]
+    if not path.exists():
+        flash("Sample photo file is missing from sample_uploads/.", "error")
+        return redirect(url_for("sample_detail", qr_code_value=photo["qr_code_value"]))
+    return send_file(path, mimetype=photo["content_type"] or "application/octet-stream", download_name=photo["original_filename"] or photo["stored_filename"])
+
+
+@app.route("/sample-photo/<int:photo_id>/delete", methods=["POST"])
+@admin_required
+def delete_sample_photo(photo_id: int) -> Response:
+    with get_db() as conn:
+        photo = conn.execute("SELECT * FROM sample_photos WHERE id = ?", (photo_id,)).fetchone()
+        if not photo:
+            flash("Sample photo was not found.", "error")
+            return redirect(url_for("search"))
+        qr_code_value = photo["qr_code_value"]
+        path = SAMPLE_UPLOAD_DIR / photo["stored_filename"]
+        conn.execute("DELETE FROM sample_photos WHERE id = ?", (photo_id,))
+        log_audit_event(conn, "sample", qr_code_value, "sample_photo_deleted", {"photo_id": photo_id, "original_filename": photo["original_filename"]})
+        log_system_audit_event(conn, "sample_photo_deleted", "success", target_type="sample", target_id=qr_code_value, details={"photo_id": photo_id})
+    try:
+        if path.exists():
+            path.unlink()
+    except OSError as exc:
+        print("TRACEAPL PHOTO DELETE ERROR:", repr(exc))
+    flash("Sample photo deleted.", "success")
+    return redirect(url_for("sample_detail", qr_code_value=qr_code_value))
 
 
 @app.route("/sample/<path:qr_code_value>/label")
@@ -1534,6 +2536,10 @@ def edit_sample(qr_code_value: str) -> str | Response:
             "notes": request.form.get("notes", "").strip(),
         }
 
+        if sample_id_exists_in_work_program(new_values["sample_id"], new_values["work_program"], exclude_qr_code_value=qr_code_value):
+            flash("That Sample ID already exists in this Work Program. Use a unique Sample ID within the Work Program, or choose a different Work Program.", "error")
+            return redirect(url_for("edit_sample", qr_code_value=qr_code_value))
+
         with get_db() as conn:
             conn.execute(
                 """
@@ -1695,6 +2701,68 @@ def admin_audit() -> str:
     return render_template("audit.html", events=events)
 
 
+
+
+@app.route("/admin/system-audit")
+@admin_required
+def admin_system_audit() -> str:
+    event_type = request.args.get("event_type", "").strip()
+    username = request.args.get("username", "").strip()
+    outcome = request.args.get("outcome", "").strip()
+
+    where = []
+    params: list[Any] = []
+    if event_type:
+        where.append("event_type LIKE ?")
+        params.append(f"%{event_type}%")
+    if username:
+        where.append("username LIKE ?")
+        params.append(f"%{username}%")
+    if outcome:
+        where.append("outcome = ?")
+        params.append(outcome)
+
+    where_sql = "WHERE " + " AND ".join(where) if where else ""
+    with get_db() as conn:
+        events = conn.execute(
+            f"SELECT * FROM system_audit_log {where_sql} ORDER BY timestamp DESC, id DESC LIMIT 500",
+            params,
+        ).fetchall()
+        total = conn.execute("SELECT COUNT(*) AS count FROM system_audit_log").fetchone()["count"]
+    return render_template(
+        "system_audit.html",
+        events=events,
+        total=total,
+        retention_days=TRACEAPL_SYSTEM_AUDIT_RETENTION_DAYS,
+        event_type=event_type,
+        username=username,
+        outcome=outcome,
+    )
+
+
+@app.route("/admin/system-audit/export")
+@admin_required
+def export_system_audit() -> Response:
+    output = io.StringIO()
+    writer = csv.writer(output)
+    with get_db() as conn:
+        log_system_audit_event(conn, "system_audit_export", "success", target_type="system_audit_log", target_id="export")
+        rows = conn.execute("SELECT * FROM system_audit_log ORDER BY timestamp DESC, id DESC").fetchall()
+    if rows:
+        writer.writerow(rows[0].keys())
+        for row in rows:
+            writer.writerow([row[key] for key in row.keys()])
+    else:
+        writer.writerow(["No records"])
+    data = io.BytesIO(output.getvalue().encode("utf-8"))
+    return send_file(
+        data,
+        mimetype="text/csv",
+        as_attachment=True,
+        download_name=f"system_audit_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+    )
+
+
 @app.route("/sample/<path:qr_code_value>/delete", methods=["POST"])
 @admin_required
 def delete_sample(qr_code_value: str) -> Response:
@@ -1738,6 +2806,8 @@ def delete_sample(qr_code_value: str) -> Response:
 @admin_required
 def create_backup_now() -> Response:
     backup_path = create_database_backup("manual")
+    with get_db() as conn:
+        log_system_audit_event(conn, "backup_create", "success" if backup_path else "failure", target_type="backup", target_id=backup_path.name if backup_path else "none")
     if backup_path:
         flash(f"Manual database backup created: {backup_path.name}", "success")
     else:
@@ -1750,8 +2820,12 @@ def create_backup_now() -> Response:
 def download_latest_backup() -> Response:
     backup_path = latest_backup()
     if not backup_path:
+        with get_db() as conn:
+            log_system_audit_event(conn, "backup_download", "failure", target_type="backup", target_id="none", details={"reason": "no_backup_available"})
         flash("No backup is available yet.", "error")
         return redirect(url_for("home"))
+    with get_db() as conn:
+        log_system_audit_event(conn, "backup_download", "success", target_type="backup", target_id=backup_path.name)
     return send_file(
         backup_path,
         mimetype="application/octet-stream",
@@ -1770,6 +2844,7 @@ def export(kind: str) -> Response:
     writer = csv.writer(output)
 
     with get_db() as conn:
+        log_system_audit_event(conn, "data_export", "success", target_type="export", target_id=kind)
         rows = conn.execute(f"SELECT * FROM {kind} ORDER BY id DESC").fetchall()
 
     if rows:

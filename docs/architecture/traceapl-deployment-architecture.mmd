@@ -1,0 +1,26 @@
+flowchart TB
+    subgraph Clients[Client Devices]
+        Desktop[Desktop Browser]
+        Mobile[Mobile Browser / Camera Scanner]
+    end
+
+    subgraph Boundary[Protected APL Network / SSO Boundary]
+        subgraph VM[TraceAPL Host / VM]
+            Flask[Flask App Server]
+            Static[Static Assets and Templates]
+            DB[(sample_tracker_web.db)]
+            BackupDir[(backups/)]
+            Certs[(certs/ - local only)]
+            Audit[(system_audit_log)]
+        end
+    end
+
+    Desktop -->|HTTPS| Flask
+    Mobile -->|HTTPS| Flask
+    Flask --> Static
+    Flask --> DB
+    Flask --> BackupDir
+    Flask --> Audit
+    Flask -->|HTTPS REST| Denodo[Denodo REST Views]
+    Flask -->|SMTP/TLS| Mail[APL SMTP]
+    Flask --> Certs

@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-title">
+  <h1>CHAR HAND OFF Denodo Sync</h1>
+  <p>Admin-only tool for importing samples from Denodo work orders tagged with CHAR HAND OFF.</p>
+</section>
+
+<section class="grid two">
+  <div class="card">
+    <h2>Configuration</h2>
+    <div class="details compact-details">
+      <div><strong>Automatic sync enabled</strong><span>{{ "Yes" if sync_enabled else "No" }}</span></div>
+      <div><strong>Default mode</strong><span>{{ "Dry run" if dry_run else "Create samples" }}</span></div>
+      <div><strong>Daily run hour</strong><span>{{ sync_hour }}:00 server local time</span></div>
+      <div><strong>Operation tag</strong><span>{{ operation_value }}</span></div>
+      <div><strong>Default location</strong><span>{{ default_location }}</span></div>
+      <div><strong>Notification email</strong><span>{{ notify_email or "Not configured" }}</span></div>
+    </div>
+    <p class="muted">The sync creates samples with Sample ID and Batch/Lot set to WORKORDER_BASE_ID. Work Program is WAREHOUSE_ID + WBS_CODE from ve_wo. Existing active samples with the same Work Program and Batch/Lot are skipped.</p>
+  </div>
+
+  <div class="card">
+    <h2>Run sync now</h2>
+    <p class="muted">Use dry run first to verify what TraceAPL would create. Create mode writes new samples and sends a notification email for each new sample.</p>
+    <div class="actions compact">
+      <form method="post" action="{{ url_for('admin_run_work_auth_sync') }}">
+        <input type="hidden" name="dry_run" value="1">
+        <button class="button" type="submit">Dry Run</button>
+      </form>
+      <form method="post" action="{{ url_for('admin_run_work_auth_sync') }}">
+        <input type="hidden" name="dry_run" value="0">
+        <button class="button danger" type="submit">Create New Samples</button>
+      </form>
+    </div>
+  </div>
+</section>
+
+<section class="card">
+  <h2>Last sync result</h2>
+  {% if last_run %}
+    <div class="details compact-details">
+      <div><strong>Started</strong><span>{{ last_run.started_at }}</span></div>
+      <div><strong>Triggered by</strong><span>{{ last_run.triggered_by }}</span></div>
+      <div><strong>Mode</strong><span>{{ "Dry run" if last_run.dry_run else "Create samples" }}</span></div>
+      <div><strong>Scanned</strong><span>{{ last_run.scanned }}</span></div>
+      <div><strong>Created</strong><span>{{ last_run.created }}</span></div>
+      <div><strong>Duplicates skipped</strong><span>{{ last_run.skipped_existing }}</span></div>
+      <div><strong>Missing project skipped</strong><span>{{ last_run.skipped_missing_project }}</span></div>
+    </div>
+    {% if last_run.errors %}
+      <h3>Errors</h3>
+      <ul>
+        {% for err in last_run.errors %}<li>{{ err }}</li>{% endfor %}
+      </ul>
+    {% endif %}
+    {% if last_run.created_samples %}
+      <h3>New or proposed samples</h3>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Sample ID</th><th>Batch/Lot</th><th>Work Program</th><th>Location</th><th>Tracking value</th></tr>
+          </thead>
+          <tbody>
+            {% for item in last_run.created_samples[:100] %}
+              <tr>
+                <td>{{ item.sample_id }}</td>
+                <td>{{ item.batch_lot }}</td>
+                <td>{{ item.work_program }}</td>
+                <td>{{ item.current_location }}</td>
+                <td><code>{{ item.qr_code_value }}</code></td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% if last_run.created_samples|length > 100 %}
+        <p class="muted">Showing first 100 records.</p>
+      {% endif %}
+    {% endif %}
+  {% else %}
+    <p class="muted">No sync run has been recorded yet.</p>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>Denodo endpoints</h2>
+  <p><strong>Operations view:</strong> <code>{{ ops_url }}</code></p>
+  <p><strong>Work order view:</strong> <code>{{ wo_url }}</code></p>
+</section>
+{% endblock %}

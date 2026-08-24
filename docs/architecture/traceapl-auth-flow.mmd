@@ -1,0 +1,25 @@
+flowchart TD
+    Start[User requests TraceAPL page] --> Session{Valid session?}
+    Session -->|Yes| Page[Allow requested page]
+    Session -->|No| Remember{Valid remember-device token?}
+    Remember -->|Yes| Restore[Restore session] --> Page
+    Remember -->|No| Login[Redirect to login]
+
+    Login --> Choice{Login or self-register?}
+    Choice -->|Login| Credentials[Submit username/password]
+    Choice -->|Register| Register[Create username/password account]
+
+    Register --> Reserved{Username is reserved admin?}
+    Reserved -->|Yes| Block[Reject registration]
+    Reserved -->|No| NormalUser[Create normal user account]
+
+    Credentials --> AdminCheck{Username matches built-in admin?}
+    AdminCheck -->|Yes| AdminPassword[Validate TRACEAPL_ADMIN_PASSWORD]
+    AdminCheck -->|No| UserPassword[Validate stored user password hash]
+
+    AdminPassword --> AdminSession[Admin session]
+    UserPassword --> UserSession[User session]
+
+    AdminSession --> AdminRoutes[Admin-only routes allowed]
+    UserSession --> UserRoutes[Normal TraceAPL routes allowed]
+    UserSession --> AdminDenied[Admin-only routes denied and audited]
