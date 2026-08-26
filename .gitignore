@@ -1,0 +1,29 @@
+'.venv/
+__pycache__/
+*.pyc
+sample_tracker_web.db
+sample_tracker_web_backup*.db
+backups/
+.env
+*.env
+certs/
+*.csr
+CSR.csr
+*.key
+*.cer
+*.crt
+*.pem
+node_modules/
+
+sample_uploads/
+sample_uploads/*traceapl_watchdog_state.json
+
+#local launch scripts/machine-specific startup files
+run_traceapl.ps1
+run_traceapl*.ps1
+run_traceapl_mac.sh
+
+#local/demo launch helpers
+run_phone_demo.bat
+run_phone_demo.command
+
